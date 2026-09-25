@@ -6,51 +6,22 @@ ForgeCC is designed as a compiler built on top of LLVM.
 
 The architecture separates the compiler into several layers:
 
-```text
-                    C++ Source
-                        |
-                        v
-                +---------------+
-                |    Frontend   |
-                | Lexer / Parser|
-                +-------+-------+
-                        |
-                        v
-                     AST
-                        |
-                        v
-              Semantic Analysis
-                        |
-                        v
-             +-------------------+
-             |    ForgeCC IR     |
-             | C++ + Tensor Info |
-             +---------+---------+
-                       |
-             +---------+---------+
-             |                   |
-             v                   v
-       Normal C++ Path       ML/Tensor Path
-             |                   |
-             |                   v
-             |            ML/GPU Analysis
-             |                   |
-             +---------+---------+
-                       |
-                       v
-                Optimization
-                       |
-                       v
-                   LLVM IR
-                       |
-              +--------+--------+
-              |                 |
-              v                 v
-          CPU Backend       GPU Backend
-              |                 |
-              v                 v
-         CPU Machine        GPU Code
-             Code
+```mermaid
+flowchart TD
+    A["C++ Source"] --> B["Frontend<br/>Lexer / Parser"]
+    B --> C["AST"]
+    C --> D["Semantic Analysis"]
+    D --> E["ForgeCC IR<br/>C++ + Tensor Info"]
+    E --> F["Normal C++ Path"]
+    E --> G["ML/Tensor Path"]
+    G --> H["ML/GPU Analysis"]
+    F --> I["Optimization"]
+    H --> I
+    I --> J["LLVM IR"]
+    J --> K["CPU Backend"]
+    J --> L["GPU Backend"]
+    K --> M["CPU Machine Code"]
+    L --> N["GPU Code"]
 ```
 
 ---
@@ -61,23 +32,13 @@ LLVM is the foundation of ForgeCC.
 
 A simplified LLVM-based compilation pipeline is:
 
-```text
-Source Code
-    |
-    v
-Frontend
-    |
-    v
-LLVM IR
-    |
-    v
-LLVM Optimization Passes
-    |
-    v
-Target-Specific Code Generation
-    |
-    v
-Object / Executable
+```mermaid
+flowchart TD
+    A["Source Code"] --> B["Frontend"]
+    B --> C["LLVM IR"]
+    C --> D["LLVM Optimization Passes"]
+    D --> E["Target-Specific Code Generation"]
+    E --> F["Object / Executable"]
 ```
 
 ForgeCC adds additional layers before and around LLVM IR.
@@ -88,26 +49,15 @@ ForgeCC adds additional layers before and around LLVM IR.
 
 The relationship should be:
 
-```text
-                 ForgeCC
-                    |
-        +-----------+-----------+
-        |                       |
-   Frontend/Analysis       ML/GPU Layer
-        |                       |
-        +-----------+-----------+
-                    |
-                    v
-               LLVM IR
-                    |
-                    v
-            LLVM Infrastructure
-                    |
-             +------+------+
-             |             |
-             v             v
-            CPU           GPU
-           Target        Target
+```mermaid
+flowchart TD
+    A["ForgeCC"] --> B["Frontend/Analysis"]
+    A --> C["ML/GPU Layer"]
+    B --> D["LLVM IR"]
+    C --> D
+    D --> E["LLVM Infrastructure"]
+    E --> F["CPU Target"]
+    E --> G["GPU Target"]
 ```
 
 ForgeCC does not need to rewrite LLVM's existing optimizer or CPU backend.
@@ -156,12 +106,12 @@ C = A + B;
 
 becomes conceptually:
 
-```text
-Assignment
-├── Variable: C
-└── BinaryOperation: +
-    ├── Variable: A
-    └── Variable: B
+```mermaid
+flowchart TD
+    A["Assignment"] --> B["Variable: C"]
+    A --> C["BinaryOperation: +"]
+    C --> D["Variable: A"]
+    C --> E["Variable: B"]
 ```
 
 The AST is the foundation for semantic analysis.
@@ -210,25 +160,11 @@ ForgeCC should introduce a compiler-level representation for GPU/ML-aware operat
 
 Example:
 
-```text
-Tensor A
-Shape: [1024, 1024]
-DType: FP32
-Device: Unknown
-
-Tensor B
-Shape: [1024, 1024]
-DType: FP32
-Device: Unknown
-
-        |
-        v
-
-       MatMul
-        |
-        v
-
-       ReLU
+```mermaid
+flowchart TD
+    A["Tensor A<br/>Shape: [1024, 1024]<br/>DType: FP32<br/>Device: Unknown"] --> C["MatMul"]
+    B["Tensor B<br/>Shape: [1024, 1024]<br/>DType: FP32<br/>Device: Unknown"] --> C
+    C --> D["ReLU"]
 ```
 
 A possible conceptual IR:
@@ -248,14 +184,14 @@ This is not necessarily the final textual syntax. The actual IR representation w
 
 A tensor should contain information such as:
 
-```text
-Tensor
-├── Element Type
-├── Shape
-├── Strides
-├── Layout
-├── Device
-└── Memory Location
+```mermaid
+flowchart TD
+    A["Tensor"] --> B["Element Type"]
+    A --> C["Shape"]
+    A --> D["Strides"]
+    A --> E["Layout"]
+    A --> F["Device"]
+    A --> G["Memory Location"]
 ```
 
 Example:
@@ -307,25 +243,22 @@ The compiler should treat these as high-level operations before lowering them to
 
 ForgeCC will contain optimization passes before final lowering.
 
-```text
-ForgeCC IR
-    |
-    +--> Constant Folding
-    |
-    +--> Dead Operation Elimination
-    |
-    +--> Common Subexpression Elimination
-    |
-    +--> Operator Fusion
-    |
-    +--> Tensor Layout Optimization
-    |
-    +--> Memory Planning
-    |
-    +--> Device Placement
-    |
-    v
-Optimized IR
+```mermaid
+flowchart TD
+    A["ForgeCC IR"] --> B["Constant Folding"]
+    A --> C["Dead Operation Elimination"]
+    A --> D["Common Subexpression Elimination"]
+    A --> E["Operator Fusion"]
+    A --> F["Tensor Layout Optimization"]
+    A --> G["Memory Planning"]
+    A --> H["Device Placement"]
+    B --> I["Optimized IR"]
+    C --> I
+    D --> I
+    E --> I
+    F --> I
+    G --> I
+    H --> I
 ```
 
 ---
@@ -334,20 +267,15 @@ Optimized IR
 
 Example:
 
-```text
-MatMul
-  |
-  v
-Add
-  |
-  v
-ReLU
-```
-
-can potentially become:
-
-```text
-FusedMatMulAddReLU
+```mermaid
+flowchart TD
+    subgraph Before["Before Fusion"]
+        direction TD
+        A["MatMul"] --> B["Add"] --> C["ReLU"]
+    end
+    subgraph After["After Fusion"]
+        D["FusedMatMulAddReLU"]
+    end
 ```
 
 This reduces intermediate memory operations and potentially reduces GPU kernel launches.
@@ -358,15 +286,11 @@ This reduces intermediate memory operations and potentially reduces GPU kernel l
 
 Each operation can eventually receive a device assignment:
 
-```text
-Operation
-    |
-    v
-Cost Model
-    |
-    +---- CPU
-    |
-    +---- GPU
+```mermaid
+flowchart TD
+    A["Operation"] --> B["Cost Model"]
+    B --> C["CPU"]
+    B --> D["GPU"]
 ```
 
 The compiler considers:
@@ -393,8 +317,9 @@ Result: GPU
 
 The compiler avoids unnecessary:
 
-```text
-GPU -> CPU -> GPU
+```mermaid
+flowchart LR
+    A["GPU"] --> B["CPU"] --> C["GPU"]
 ```
 
 transfers.
@@ -405,16 +330,9 @@ transfers.
 
 The compiler must understand two major memory domains:
 
-```text
-+----------------+
-|    CPU RAM     |
-+----------------+
-        |
-        | Transfer
-        v
-+----------------+
-|   GPU Memory   |
-+----------------+
+```mermaid
+flowchart TD
+    A["CPU RAM"] -- "Transfer" --> B["GPU Memory"]
 ```
 
 A future memory planner should determine:
@@ -433,31 +351,18 @@ A future memory planner should determine:
 
 After ForgeCC-specific optimization:
 
-```text
-ForgeCC IR
-    |
-    v
-Lowering
-    |
-    v
-LLVM IR
+```mermaid
+flowchart TD
+    A["ForgeCC IR"] --> B["Lowering"] --> C["LLVM IR"]
 ```
 
 For CPU-compatible operations, LLVM IR can be generated directly.
 
 Conceptually:
 
-```text
-Tensor Operation
-       |
-       v
-Loop / Vector Operations
-       |
-       v
-LLVM IR
-       |
-       v
-LLVM CPU Backend
+```mermaid
+flowchart TD
+    A["Tensor Operation"] --> B["Loop / Vector Operations"] --> C["LLVM IR"] --> D["LLVM CPU Backend"]
 ```
 
 ---
@@ -468,20 +373,9 @@ The GPU backend is a separate component.
 
 Conceptually:
 
-```text
-ForgeCC GPU IR
-       |
-       v
-GPU Lowering
-       |
-       v
-GPU Intermediate Representation
-       |
-       v
-GPU Code Generation
-       |
-       v
-GPU Kernel
+```mermaid
+flowchart TD
+    A["ForgeCC GPU IR"] --> B["GPU Lowering"] --> C["GPU Intermediate Representation"] --> D["GPU Code Generation"] --> E["GPU Kernel"]
 ```
 
 The first implementation should target **one GPU ecosystem**.
@@ -507,25 +401,17 @@ Result Retrieval
 
 Architecture:
 
-```text
-Compiler
-   |
-   v
-Generated GPU Code
-   |
-   v
-ForgeCC Runtime
-   |
-   +---- Device API
-   |
-   +---- Memory Manager
-   |
-   +---- Kernel Launcher
-   |
-   +---- Synchronization
-   |
-   v
-GPU
+```mermaid
+flowchart TD
+    A["Compiler"] --> B["Generated GPU Code"] --> C["ForgeCC Runtime"]
+    C --> D["Device API"]
+    C --> E["Memory Manager"]
+    C --> F["Kernel Launcher"]
+    C --> G["Synchronization"]
+    D --> H["GPU"]
+    E --> H
+    F --> H
+    G --> H
 ```
 
 ---
@@ -668,32 +554,16 @@ The exact CLI will be finalized during implementation.
 
 ## Phase 1 — LLVM Foundation
 
-```text
-CMake
-  |
-  v
-LLVM
-  |
-  v
-Minimal compiler executable
-  |
-  v
-Generate LLVM IR
+```mermaid
+flowchart TD
+    A["CMake"] --> B["LLVM"] --> C["Minimal compiler executable"] --> D["Generate LLVM IR"]
 ```
 
 ## Phase 2 — Compiler Frontend
 
-```text
-Source
-  |
-  v
-AST
-  |
-  v
-Semantic Analysis
-  |
-  v
-LLVM IR
+```mermaid
+flowchart TD
+    A["Source"] --> B["AST"] --> C["Semantic Analysis"] --> D["LLVM IR"]
 ```
 
 ## Phase 3 — Custom IR
@@ -726,14 +596,9 @@ Memory Planning
 
 Start with one GPU target:
 
-```text
-ForgeCC IR
-    |
-    v
-GPU Lowering
-    |
-    v
-GPU Kernel
+```mermaid
+flowchart TD
+    A["ForgeCC IR"] --> B["GPU Lowering"] --> C["GPU Kernel"]
 ```
 
 ## Phase 6 — Runtime
@@ -765,54 +630,29 @@ Kernel Selection
 
 The final architecture should look approximately like:
 
-```text
-                         ForgeCC
-                            |
-                      C++ Frontend
-                            |
-                            v
-                           AST
-                            |
-                            v
-                    Semantic Analysis
-                            |
-                            v
-                      ForgeCC IR
-                            |
-             +--------------+--------------+
-             |                             |
-             v                             v
-        C++ Analysis                 Tensor Analysis
-             |                             |
-             |                       Shape Inference
-             |                       Device Analysis
-             |                       Cost Analysis
-             |                             |
-             +--------------+--------------+
-                            |
-                            v
-                     Optimization
-                            |
-                  +---------+---------+
-                  |                   |
-                  v                   v
-              CPU Lowering       GPU Lowering
-                  |                   |
-                  v                   v
-               LLVM IR            GPU IR
-                  |                   |
-                  v                   v
-             LLVM Backend        GPU Backend
-                  |                   |
-                  v                   v
-                CPU                 GPU
-                  \                   /
-                   \                 /
-                    v               v
-                     ForgeCC Runtime
-                            |
-                            v
-                         Program
+```mermaid
+flowchart TD
+    A["ForgeCC"] --> B["C++ Frontend"] --> C["AST"] --> D["Semantic Analysis"] --> E["ForgeCC IR"]
+    E --> F["C++ Analysis"]
+    E --> G["Tensor Analysis"]
+    G --> H["Shape Inference"]
+    G --> I["Device Analysis"]
+    G --> J["Cost Analysis"]
+    F --> K["Optimization"]
+    H --> K
+    I --> K
+    J --> K
+    K --> L["CPU Lowering"]
+    K --> M["GPU Lowering"]
+    L --> N["LLVM IR"]
+    M --> O["GPU IR"]
+    N --> P["LLVM Backend"]
+    O --> Q["GPU Backend"]
+    P --> R["CPU"]
+    Q --> S["GPU"]
+    R --> T["ForgeCC Runtime"]
+    S --> T
+    T --> U["Program"]
 ```
 
 ---
