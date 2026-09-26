@@ -8,7 +8,8 @@ public:
 private:
     std::string inputFile;
     std::string outputFile;
-    bool emitIR = false;
+    bool emitIR      = false;
+    bool emitForgeIR = false;
 
     void parseArgs(int argc, char* argv[]);
     void compile();

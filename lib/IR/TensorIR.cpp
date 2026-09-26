@@ -1,78 +1,32 @@
-#pragma once
-#include <string>
-#include <vector>
-#include <memory>
-#include <cstdint>
+#include "forgecc/IR/TensorIR.hpp"
+#include <iostream>
 
 namespace forgecc {
 namespace ir {
 
-enum class DeviceKind { Unknown, CPU, GPU };
-enum class OpKind     { TensorLoad, MatMul, ReLU, Add };
+void IRModule::dump() const {
+    std::cout << "; ForgeCC IR Module: " << name << "\n\n";
 
-struct TensorType {
-    std::string     dtype;    
-    std::vector<int64_t> shape;
-    DeviceKind      device = DeviceKind::Unknown;
-};
+    for (const auto& val : values) {
+        std::cout << "tensor " << val->name << " : " << val->type.dtype << " [";
+        for (size_t i = 0; i < val->type.shape.size(); ++i) {
+            if (i) std::cout << ", ";
+            std::cout << val->type.shape[i];
+        }
+        std::cout << "]\n";
+    }
 
+    std::cout << "\n";
 
-class Value {
-public:
-    std::string  name;
-    TensorType   type;
+    for (const auto& op : ops) {
+        std::cout << "  " << op->getName() << " : ";
+        for (auto* operand : op->operands)
+            std::cout << operand->name << " ";
+        if (op->result)
+            std::cout << "-> " << op->result->name;
+        std::cout << "\n";
+    }
+}
 
-    Value(std::string name, TensorType type)
-        : name(std::move(name)), type(std::move(type)) {}
-};
-
-
-class Operation {
-public:
-    virtual ~Operation() = default;
-    virtual OpKind  getKind() const = 0;
-    virtual std::string getName() const = 0;
-
-    std::vector<Value*> operands;
-    Value*              result = nullptr;
-    DeviceKind          device = DeviceKind::Unknown;
-};
-
-
-class MatMulOp : public Operation {
-public:
-    OpKind getKind() const override { return OpKind::MatMul; }
-    std::string getName() const override { return "matmul"; }
-};
-
-
-class ReLUOp : public Operation {
-public:
-    OpKind getKind() const override { return OpKind::ReLU; }
-    std::string getName() const override { return "relu"; }
-};
-
-
-class AddOp : public Operation {
-public:
-    OpKind getKind() const override { return OpKind::Add; }
-    std::string getName() const override { return "add"; }
-};
-
-
-class IRModule {
-public:
-    std::string name;
-    std::vector<std::unique_ptr<Value>>     values;
-    std::vector<std::unique_ptr<Operation>> ops;
-
-    IRModule(std::string name) : name(std::move(name)) {}
-
-    void addValue(std::unique_ptr<Value> v) { values.push_back(std::move(v)); }
-    void addOp(std::unique_ptr<Operation> op) { ops.push_back(std::move(op)); }
-
-    void dump() const;
-};
-
-} // namespace ir
-} // namespace forgecc
+}
+}
