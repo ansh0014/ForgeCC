@@ -10,6 +10,7 @@ private:
     std::string outputFile;
     bool emitIR      = false;
     bool emitForgeIR = false;
+    bool emitObj     = false;
 
     void parseArgs(int argc, char* argv[]);
     void compile();

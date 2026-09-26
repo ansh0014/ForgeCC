@@ -77,11 +77,13 @@ void Driver::parseArgs(int argc, char* argv[]) {
     outputFile   = "output";
     emitIR       = false;
     emitForgeIR  = false;
+    emitObj      = false;
 
     for (int i = 2; i < argc; ++i) {
         std::string arg = argv[i];
         if      (arg == "--emit-ir")       emitIR = true;
         else if (arg == "--emit-forge-ir") emitForgeIR = true;
+        else if (arg == "--emit-obj")      emitObj = true;
         else if (arg == "-o" && i + 1 < argc) outputFile = argv[++i];
     }
 }
@@ -114,8 +116,9 @@ void Driver::compile() {
     forgecc::codegen::LLVMCodeGen cg(diags, "forgecc_module");
     cg.generate(irModule);
 
-    if (emitIR) cg.emitIR();
-    else        std::cout << "forgecc: compiled " << inputFile << " -> " << outputFile << "\n";
+    if (emitIR)       cg.emitIR();
+    else if (emitObj) cg.emitObjectFile(outputFile + ".o");
+    else              std::cout << "forgecc: compiled " << inputFile << " -> " << outputFile << "\n";
 }
 
 int Driver::run(int argc, char* argv[]) {
