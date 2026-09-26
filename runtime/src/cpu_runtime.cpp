@@ -18,3 +18,4 @@ void cpu_relu(const float* in, float* out, int64_t n) {
 }
 
 }
+

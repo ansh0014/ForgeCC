@@ -10,3 +10,4 @@ inline std::string deviceName(Device d) {
 }
 
 }
+

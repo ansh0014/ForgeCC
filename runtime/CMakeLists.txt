@@ -6,3 +6,4 @@ add_library(forgecc_rt STATIC
 target_include_directories(forgecc_rt PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
+

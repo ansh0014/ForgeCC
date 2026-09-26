@@ -19,3 +19,4 @@ void gpu_launch_matmul(const float*, const float*, float*, int, int, int) {
 }
 
 }
+
