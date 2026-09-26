@@ -35,12 +35,14 @@ public:
                     diags.report(DiagLevel::Error, "Undeclared tensor: " + mm->rhs);
                     return false;
                 }
+                symbolTable[mm->output] = {mm->output, "f32", {}};
             } else if (stmt->getKind() == ast::ASTKind::ReLUOp) {
                 auto* ru = static_cast<ast::ReLUNode*>(stmt.get());
                 if (!symbolTable.count(ru->input)) {
                     diags.report(DiagLevel::Error, "Undeclared tensor: " + ru->input);
                     return false;
                 }
+                symbolTable[ru->output] = {ru->output, "f32", {}};
             }
         }
         return true;

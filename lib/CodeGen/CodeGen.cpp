@@ -42,7 +42,7 @@ void LLVMCodeGen::emitObjectFile(const std::string& path) {
     llvm::InitializeAllAsmParsers();
     llvm::InitializeAllAsmPrinters();
 
-    auto triple = llvm::sys::getDefaultTargetTriple();
+    llvm::Triple triple(llvm::sys::getDefaultTargetTriple());
     module_->setTargetTriple(triple);
 
     std::string error;
