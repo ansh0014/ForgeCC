@@ -5,11 +5,40 @@ from .core import (
     Tensor,
     tensor,
     matmul,
+    add,
+    sub,
+    mul,
+    div,
     relu,
-    matmul_relu
+    sigmoid,
+    gelu,
+    tanh,
+    sum_tensor as sum,
+    mean_tensor as mean,
+    matmul_relu,
+    matmul_add,
+    matmul_add_relu
 )
 
-__version__ = "0.1.3"
+from .ir import (
+    OpKind,
+    Value,
+    Node,
+    Graph,
+    Pass,
+    PassManager,
+    ConstantFoldingPass,
+    AlgebraicSimplificationPass,
+    CommonSubexpressionEliminationPass,
+    OperatorFusionPass,
+    DeadCodeEliminationPass,
+    CUDACodeGen,
+    trace,
+    compile,
+    CompiledGraph
+)
+
+__version__ = "0.1.4"
 __all__ = [
     "Device",
     "is_gpu_available",
@@ -17,6 +46,32 @@ __all__ = [
     "Tensor",
     "tensor",
     "matmul",
+    "add",
+    "sub",
+    "mul",
+    "div",
     "relu",
-    "matmul_relu"
+    "sigmoid",
+    "gelu",
+    "tanh",
+    "sum",
+    "mean",
+    "matmul_relu",
+    "matmul_add",
+    "matmul_add_relu",
+    "OpKind",
+    "Value",
+    "Node",
+    "Graph",
+    "Pass",
+    "PassManager",
+    "ConstantFoldingPass",
+    "AlgebraicSimplificationPass",
+    "CommonSubexpressionEliminationPass",
+    "OperatorFusionPass",
+    "DeadCodeEliminationPass",
+    "CUDACodeGen",
+    "trace",
+    "compile",
+    "CompiledGraph"
 ]
