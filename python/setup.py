@@ -8,7 +8,7 @@ if os.path.exists("README.md"):
 
 setup(
     name="forgecc",
-    version="0.1.3",
+    version="0.1.4",
     description="LLVM & CUDA Accelerated AI / Tensor Compiler Engine",
     long_description=long_description,
     long_description_content_type="text/markdown",
