@@ -1,0 +1,10 @@
+README.md
+setup.py
+forgecc/__init__.py
+forgecc/core.py
+forgecc/libforgecc_rt.dll
+forgecc.egg-info/PKG-INFO
+forgecc.egg-info/SOURCES.txt
+forgecc.egg-info/dependency_links.txt
+forgecc.egg-info/requires.txt
+forgecc.egg-info/top_level.txt
