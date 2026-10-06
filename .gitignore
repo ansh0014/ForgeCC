@@ -61,7 +61,6 @@ bin/
 obj/
 *.exe
 *.dll
-!python/forgecc/*.dll
 *.so
 *.dylib
 *.class
