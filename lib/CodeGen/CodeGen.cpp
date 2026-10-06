@@ -25,18 +25,34 @@ bool LLVMCodeGen::generate(const ir::IRModule& irModule) {
     auto* i64Ty  = llvm::Type::getInt64Ty(ctx_);
     auto* voidTy = llvm::Type::getVoidTy(ctx_);
 
-    auto mallocFn = module_->getOrInsertFunction("malloc",
+    auto cpuMallocFn = module_->getOrInsertFunction("malloc",
         llvm::FunctionType::get(ptrTy, {i64Ty}, false));
 
-    auto freeFn = module_->getOrInsertFunction("free",
+    auto cpuFreeFn = module_->getOrInsertFunction("free",
         llvm::FunctionType::get(voidTy, {ptrTy}, false));
 
-    auto matmulFn = module_->getOrInsertFunction("cpu_matmul",
+    auto cpuMatmulFn = module_->getOrInsertFunction("cpu_matmul",
         llvm::FunctionType::get(voidTy,
             {ptrTy, ptrTy, ptrTy, i64Ty, i64Ty, i64Ty}, false));
 
-    auto reluFn = module_->getOrInsertFunction("cpu_relu",
+    auto cpuReluFn = module_->getOrInsertFunction("cpu_relu",
         llvm::FunctionType::get(voidTy, {ptrTy, ptrTy, i64Ty}, false));
+
+    auto gpuMallocFn = module_->getOrInsertFunction("forge_gpu_malloc",
+        llvm::FunctionType::get(ptrTy, {i64Ty}, false));
+
+    auto gpuFreeFn = module_->getOrInsertFunction("forge_gpu_free",
+        llvm::FunctionType::get(voidTy, {ptrTy}, false));
+
+    auto gpuMatmulFn = module_->getOrInsertFunction("forge_gpu_matmul",
+        llvm::FunctionType::get(voidTy,
+            {ptrTy, ptrTy, ptrTy, i64Ty, i64Ty, i64Ty}, false));
+
+    auto gpuReluFn = module_->getOrInsertFunction("forge_gpu_relu",
+        llvm::FunctionType::get(voidTy, {ptrTy, ptrTy, i64Ty}, false));
+
+    auto gpuSyncFn = module_->getOrInsertFunction("forge_gpu_sync",
+        llvm::FunctionType::get(voidTy, {}, false));
 
     auto* funcType = llvm::FunctionType::get(builder_.getInt32Ty(), false);
     auto* func = llvm::Function::Create(
@@ -44,17 +60,29 @@ bool LLVMCodeGen::generate(const ir::IRModule& irModule) {
     auto* entry = llvm::BasicBlock::Create(ctx_, "entry", func);
     builder_.SetInsertPoint(entry);
 
+    bool hasGpuOps = false;
+    for (const auto& op : irModule.ops) {
+        if (op->device == ir::DeviceKind::GPU) {
+            hasGpuOps = true;
+            break;
+        }
+    }
+
     std::unordered_map<std::string, llvm::Value*> tensorPtrs;
 
     for (const auto& val : irModule.values) {
         int64_t numElements = 1;
         for (auto d : val->type.shape) numElements *= d;
         auto* bytes = builder_.getInt64(numElements * sizeof(float));
-        auto* ptr   = builder_.CreateCall(mallocFn, {bytes}, val->name + "_ptr");
+        
+        auto allocFn = hasGpuOps ? gpuMallocFn : cpuMallocFn;
+        auto* ptr   = builder_.CreateCall(allocFn, {bytes}, val->name + "_ptr");
         tensorPtrs[val->name] = ptr;
     }
 
     for (const auto& op : irModule.ops) {
+        bool isGpu = (op->device == ir::DeviceKind::GPU);
+
         if (op->getKind() == ir::OpKind::MatMul
             && op->operands.size() == 2
             && op->result) {
@@ -64,7 +92,9 @@ bool LLVMCodeGen::generate(const ir::IRModule& irModule) {
             auto* M = builder_.getInt64(op->result->type.shape[0]);
             auto* K = builder_.getInt64(op->operands[0]->type.shape[1]);
             auto* N = builder_.getInt64(op->result->type.shape[1]);
-            builder_.CreateCall(matmulFn, {A, B, C, M, K, N});
+            
+            auto targetFn = isGpu ? gpuMatmulFn : cpuMatmulFn;
+            builder_.CreateCall(targetFn, {A, B, C, M, K, N});
 
         } else if (op->getKind() == ir::OpKind::ReLU
                    && op->operands.size() == 1
@@ -73,11 +103,18 @@ bool LLVMCodeGen::generate(const ir::IRModule& irModule) {
             auto* out = tensorPtrs[op->result->name];
             int64_t n = 1;
             for (auto d : op->result->type.shape) n *= d;
-            builder_.CreateCall(reluFn, {in, out, builder_.getInt64(n)});
+            
+            auto targetFn = isGpu ? gpuReluFn : cpuReluFn;
+            builder_.CreateCall(targetFn, {in, out, builder_.getInt64(n)});
         }
     }
 
+    if (hasGpuOps) {
+        builder_.CreateCall(gpuSyncFn, {});
+    }
+
     for (const auto& val : irModule.values) {
+        auto freeFn = hasGpuOps ? gpuFreeFn : cpuFreeFn;
         builder_.CreateCall(freeFn, {tensorPtrs[val->name]});
     }
 
