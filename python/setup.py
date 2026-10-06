@@ -6,6 +6,10 @@ setup(
     description="LLVM & CUDA Accelerated AI / Tensor Compiler Engine",
     author="ForgeCC Team",
     packages=find_packages(),
+    package_data={
+        "forgecc": ["*.dll", "*.so", "*.dylib"]
+    },
+    include_package_data=True,
     install_requires=[
         "numpy>=1.20.0"
     ],
@@ -17,3 +21,4 @@ setup(
     ],
     python_requires=">=3.8",
 )
+
