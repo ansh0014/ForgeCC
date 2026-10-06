@@ -13,6 +13,7 @@ void cpu_relu(const float* in, float* out, int64_t n);
 
 struct ForgeTensor {
     std::vector<int64_t> shape;
+    int ndim;
     int64_t num_elements;
     ForgeDevice dev;
     void* ptr;
