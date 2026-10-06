@@ -8,9 +8,10 @@ on:
 jobs:
   pypi-publish:
     name: Build and upload to PyPI
-    runs-on: windows-latest
+    runs-on: ubuntu-latest
     permissions:
       id-token: write
+      contents: read
 
     steps:
     - name: Checkout code
@@ -27,8 +28,8 @@ jobs:
         pip install setuptools wheel build
 
     - name: Build wheel and source distribution
+      working-directory: ./python
       run: |
-        cd python
         python setup.py bdist_wheel sdist
 
     - name: Publish package to PyPI
