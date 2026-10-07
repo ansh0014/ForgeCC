@@ -3,6 +3,7 @@ import sys
 import ctypes
 import numpy as np
 from pathlib import Path
+from typing import Dict, List
 
 def _setup_dll_search_path():
     if sys.platform == "win32" and hasattr(os, "add_dll_directory"):
@@ -39,9 +40,52 @@ class Device:
     CPU = 0
     GPU = 1
 
+class GPUMemoryPool:
+    def __init__(self):
+        self._free_blocks: Dict[int, List[int]] = {}
+        self._allocated_count = 0
+        self._cached_count = 0
+
+    def allocate(self, bytes_size: int, rt_lib) -> int:
+        bucket = 1 << (bytes_size - 1).bit_length() if bytes_size > 0 else 256
+        bucket = max(bucket, 256)
+        if bucket in self._free_blocks and self._free_blocks[bucket]:
+            ptr = self._free_blocks[bucket].pop()
+            self._cached_count -= 1
+            return ptr
+        ptr = rt_lib.forge_gpu_malloc(bucket)
+        if ptr:
+            self._allocated_count += 1
+        return ptr
+
+    def free(self, ptr: int, bytes_size: int):
+        if not ptr:
+            return
+        bucket = 1 << (bytes_size - 1).bit_length() if bytes_size > 0 else 256
+        bucket = max(bucket, 256)
+        if bucket not in self._free_blocks:
+            self._free_blocks[bucket] = []
+        self._free_blocks[bucket].append(ptr)
+        self._cached_count += 1
+
+    def stats(self) -> Dict[str, int]:
+        return {
+            "total_allocations": self._allocated_count,
+            "cached_buffers": self._cached_count
+        }
+
+    def clear(self, rt_lib):
+        for bucket, ptrs in self._free_blocks.items():
+            for p in ptrs:
+                rt_lib.forge_gpu_free(p)
+        self._free_blocks.clear()
+        self._cached_count = 0
+
 class ForgeRuntime:
     def __init__(self):
         self.lib = None
+        self.mempool = GPUMemoryPool()
+        _setup_dll_search_path()
         lib_path = _find_library()
         if not lib_path:
             return
@@ -87,6 +131,11 @@ class ForgeRuntime:
             ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int64
         ]
 
+        self.lib.forge_gpu_add_relu_fused.restype = None
+        self.lib.forge_gpu_add_relu_fused.argtypes = [
+            ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int64
+        ]
+
         self.lib.forge_gpu_sub.restype = None
         self.lib.forge_gpu_sub.argtypes = [
             ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int64
@@ -112,6 +161,12 @@ class ForgeRuntime:
         self.lib.forge_gpu_matmul_add_relu_fused.restype = None
         self.lib.forge_gpu_matmul_add_relu_fused.argtypes = [
             ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p,
+            ctypes.c_int64, ctypes.c_int64, ctypes.c_int64
+        ]
+
+        self.lib.forge_gpu_matmul_add_relu_residual_fused.restype = None
+        self.lib.forge_gpu_matmul_add_relu_residual_fused.argtypes = [
+            ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p,
             ctypes.c_int64, ctypes.c_int64, ctypes.c_int64
         ]
 
@@ -143,6 +198,11 @@ class ForgeRuntime:
 
         self.lib.cpu_add.restype = None
         self.lib.cpu_add.argtypes = [
+            ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int64
+        ]
+
+        self.lib.cpu_add_relu.restype = None
+        self.lib.cpu_add_relu.argtypes = [
             ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int64
         ]
 
@@ -183,6 +243,12 @@ class ForgeRuntime:
             ctypes.c_int64, ctypes.c_int64, ctypes.c_int64
         ]
 
+        self.lib.cpu_matmul_add_relu_residual.restype = None
+        self.lib.cpu_matmul_add_relu_residual.argtypes = [
+            ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p,
+            ctypes.c_int64, ctypes.c_int64, ctypes.c_int64
+        ]
+
 _rt = ForgeRuntime()
 
 def is_gpu_available() -> bool:
@@ -197,8 +263,16 @@ def sync():
     if _rt.lib:
         _rt.lib.forge_gpu_sync()
 
+def memory_stats() -> Dict[str, int]:
+    return _rt.mempool.stats()
+
+def memory_clear():
+    if _rt.lib:
+        _rt.mempool.clear(_rt.lib)
+
 class Tensor:
     def __init__(self, data, device=Device.CPU):
+        self.gpu_ptr = None
         if isinstance(data, np.ndarray):
             self.host_array = np.ascontiguousarray(data, dtype=np.float32)
         elif isinstance(data, (list, tuple, float, int)):
@@ -210,14 +284,13 @@ class Tensor:
 
         self.shape = self.host_array.shape
         self.device = device
-        self.gpu_ptr = None
         self.nbytes = self.host_array.nbytes
 
         if self.device == Device.GPU:
             if not is_gpu_available():
                 self.device = Device.CPU
             else:
-                self.gpu_ptr = _rt.lib.forge_gpu_malloc(self.nbytes)
+                self.gpu_ptr = _rt.mempool.allocate(self.nbytes, _rt.lib)
                 if self.gpu_ptr:
                     _rt.lib.forge_gpu_memcpy_to_device(
                         self.gpu_ptr,
@@ -228,12 +301,14 @@ class Tensor:
                     self.device = Device.CPU
 
     def __del__(self):
-        if self.gpu_ptr and _rt.lib:
+        ptr = getattr(self, "gpu_ptr", None)
+        if ptr and _rt.lib:
             try:
-                _rt.lib.forge_gpu_free(self.gpu_ptr)
+                _rt.mempool.free(ptr, getattr(self, "nbytes", 0))
             except Exception:
                 pass
             self.gpu_ptr = None
+
 
     def to(self, target_device):
         if self.device == target_device:
@@ -320,7 +395,9 @@ def _to_tensor(x, device=Device.CPU):
         return x
     return Tensor(x, device=device)
 
-def matmul(A, B) -> Tensor:
+def matmul(A, B):
+    if hasattr(A, "graph") or hasattr(B, "graph"):
+        return A @ B
     t_A = _to_tensor(A)
     t_B = _to_tensor(B)
 
@@ -336,12 +413,12 @@ def matmul(A, B) -> Tensor:
     if use_gpu:
         g_A = t_A.to(Device.GPU)
         g_B = t_B.to(Device.GPU)
-        C_ptr = _rt.lib.forge_gpu_malloc(M * N * 4)
+        C_ptr = _rt.mempool.allocate(M * N * 4, _rt.lib)
         _rt.lib.forge_gpu_matmul(g_A.gpu_ptr, g_B.gpu_ptr, C_ptr, M, K, N)
         _rt.lib.forge_gpu_sync()
         out_arr = np.empty((M, N), dtype=np.float32)
         _rt.lib.forge_gpu_memcpy_to_host(out_arr.ctypes.data_as(ctypes.c_void_p), C_ptr, M * N * 4)
-        _rt.lib.forge_gpu_free(C_ptr)
+        _rt.mempool.free(C_ptr, M * N * 4)
         return Tensor(out_arr, device=Device.GPU)
     else:
         out_arr = np.empty((M, N), dtype=np.float32)
@@ -353,7 +430,9 @@ def matmul(A, B) -> Tensor:
         )
         return Tensor(out_arr, device=Device.CPU)
 
-def add(A, B) -> Tensor:
+def add(A, B):
+    if hasattr(A, "graph") or hasattr(B, "graph"):
+        return A + B
     t_A = _to_tensor(A)
     t_B = _to_tensor(B)
 
@@ -363,12 +442,12 @@ def add(A, B) -> Tensor:
         if use_gpu:
             g_A = t_A.to(Device.GPU)
             g_B = t_B.to(Device.GPU)
-            C_ptr = _rt.lib.forge_gpu_malloc(n * 4)
+            C_ptr = _rt.mempool.allocate(n * 4, _rt.lib)
             _rt.lib.forge_gpu_add(g_A.gpu_ptr, g_B.gpu_ptr, C_ptr, n)
             _rt.lib.forge_gpu_sync()
             out_arr = np.empty(t_A.shape, dtype=np.float32)
             _rt.lib.forge_gpu_memcpy_to_host(out_arr.ctypes.data_as(ctypes.c_void_p), C_ptr, n * 4)
-            _rt.lib.forge_gpu_free(C_ptr)
+            _rt.mempool.free(C_ptr, n * 4)
             return Tensor(out_arr, device=Device.GPU)
         else:
             out_arr = np.empty(t_A.shape, dtype=np.float32)
@@ -383,7 +462,9 @@ def add(A, B) -> Tensor:
         res = t_A.numpy() + t_B.numpy()
         return Tensor(res, device=Device.GPU if use_gpu else Device.CPU)
 
-def sub(A, B) -> Tensor:
+def sub(A, B):
+    if hasattr(A, "graph") or hasattr(B, "graph"):
+        return A - B
     t_A = _to_tensor(A)
     t_B = _to_tensor(B)
     use_gpu = (t_A.device == Device.GPU or t_B.device == Device.GPU) and is_gpu_available()
@@ -392,12 +473,12 @@ def sub(A, B) -> Tensor:
         if use_gpu:
             g_A = t_A.to(Device.GPU)
             g_B = t_B.to(Device.GPU)
-            C_ptr = _rt.lib.forge_gpu_malloc(n * 4)
+            C_ptr = _rt.mempool.allocate(n * 4, _rt.lib)
             _rt.lib.forge_gpu_sub(g_A.gpu_ptr, g_B.gpu_ptr, C_ptr, n)
             _rt.lib.forge_gpu_sync()
             out_arr = np.empty(t_A.shape, dtype=np.float32)
             _rt.lib.forge_gpu_memcpy_to_host(out_arr.ctypes.data_as(ctypes.c_void_p), C_ptr, n * 4)
-            _rt.lib.forge_gpu_free(C_ptr)
+            _rt.mempool.free(C_ptr, n * 4)
             return Tensor(out_arr, device=Device.GPU)
         else:
             out_arr = np.empty(t_A.shape, dtype=np.float32)
@@ -412,7 +493,9 @@ def sub(A, B) -> Tensor:
         res = t_A.numpy() - t_B.numpy()
         return Tensor(res, device=Device.GPU if use_gpu else Device.CPU)
 
-def mul(A, B) -> Tensor:
+def mul(A, B):
+    if hasattr(A, "graph") or hasattr(B, "graph"):
+        return A * B
     t_A = _to_tensor(A)
     t_B = _to_tensor(B)
     use_gpu = (t_A.device == Device.GPU or t_B.device == Device.GPU) and is_gpu_available()
@@ -421,12 +504,12 @@ def mul(A, B) -> Tensor:
         if use_gpu:
             g_A = t_A.to(Device.GPU)
             g_B = t_B.to(Device.GPU)
-            C_ptr = _rt.lib.forge_gpu_malloc(n * 4)
+            C_ptr = _rt.mempool.allocate(n * 4, _rt.lib)
             _rt.lib.forge_gpu_mul(g_A.gpu_ptr, g_B.gpu_ptr, C_ptr, n)
             _rt.lib.forge_gpu_sync()
             out_arr = np.empty(t_A.shape, dtype=np.float32)
             _rt.lib.forge_gpu_memcpy_to_host(out_arr.ctypes.data_as(ctypes.c_void_p), C_ptr, n * 4)
-            _rt.lib.forge_gpu_free(C_ptr)
+            _rt.mempool.free(C_ptr, n * 4)
             return Tensor(out_arr, device=Device.GPU)
         else:
             out_arr = np.empty(t_A.shape, dtype=np.float32)
@@ -441,23 +524,27 @@ def mul(A, B) -> Tensor:
         res = t_A.numpy() * t_B.numpy()
         return Tensor(res, device=Device.GPU if use_gpu else Device.CPU)
 
-def div(A, B) -> Tensor:
+def div(A, B):
+    if hasattr(A, "graph") or hasattr(B, "graph"):
+        return A / B
     t_A = _to_tensor(A)
     t_B = _to_tensor(B)
     res = np.divide(t_A.numpy(), t_B.numpy(), out=np.zeros_like(t_A.numpy()), where=(t_B.numpy() != 0))
     use_gpu = (t_A.device == Device.GPU or t_B.device == Device.GPU) and is_gpu_available()
     return Tensor(res, device=Device.GPU if use_gpu else Device.CPU)
 
-def relu(x) -> Tensor:
+def relu(x):
+    if hasattr(x, "graph"):
+        return x.relu()
     t_x = _to_tensor(x)
     n = int(np.prod(t_x.shape))
     if t_x.device == Device.GPU and is_gpu_available():
-        C_ptr = _rt.lib.forge_gpu_malloc(n * 4)
+        C_ptr = _rt.mempool.allocate(n * 4, _rt.lib)
         _rt.lib.forge_gpu_relu(t_x.gpu_ptr, C_ptr, n)
         _rt.lib.forge_gpu_sync()
         out_arr = np.empty(t_x.shape, dtype=np.float32)
         _rt.lib.forge_gpu_memcpy_to_host(out_arr.ctypes.data_as(ctypes.c_void_p), C_ptr, n * 4)
-        _rt.lib.forge_gpu_free(C_ptr)
+        _rt.mempool.free(C_ptr, n * 4)
         return Tensor(out_arr, device=Device.GPU)
     else:
         out_arr = np.empty(t_x.shape, dtype=np.float32)
@@ -468,7 +555,9 @@ def relu(x) -> Tensor:
         )
         return Tensor(out_arr, device=Device.CPU)
 
-def sigmoid(x) -> Tensor:
+def sigmoid(x):
+    if hasattr(x, "graph"):
+        return x.sigmoid()
     t_x = _to_tensor(x)
     n = int(np.prod(t_x.shape))
     out_arr = np.empty(t_x.shape, dtype=np.float32)
@@ -479,7 +568,9 @@ def sigmoid(x) -> Tensor:
     )
     return Tensor(out_arr, device=t_x.device)
 
-def gelu(x) -> Tensor:
+def gelu(x):
+    if hasattr(x, "graph"):
+        return x.gelu()
     t_x = _to_tensor(x)
     n = int(np.prod(t_x.shape))
     out_arr = np.empty(t_x.shape, dtype=np.float32)
@@ -490,7 +581,9 @@ def gelu(x) -> Tensor:
     )
     return Tensor(out_arr, device=t_x.device)
 
-def tanh(x) -> Tensor:
+def tanh(x):
+    if hasattr(x, "graph"):
+        return x.tanh()
     t_x = _to_tensor(x)
     n = int(np.prod(t_x.shape))
     out_arr = np.empty(t_x.shape, dtype=np.float32)
@@ -501,7 +594,9 @@ def tanh(x) -> Tensor:
     )
     return Tensor(out_arr, device=t_x.device)
 
-def sum_tensor(x) -> Tensor:
+def sum_tensor(x):
+    if hasattr(x, "graph"):
+        return x.sum()
     t_x = _to_tensor(x)
     n = int(np.prod(t_x.shape))
     res = np.empty((1,), dtype=np.float32)
@@ -512,7 +607,9 @@ def sum_tensor(x) -> Tensor:
     )
     return Tensor(res, device=t_x.device)
 
-def mean_tensor(x) -> Tensor:
+def mean_tensor(x):
+    if hasattr(x, "graph"):
+        return x.mean()
     t_x = _to_tensor(x)
     n = int(np.prod(t_x.shape))
     res = np.empty((1,), dtype=np.float32)
@@ -523,7 +620,9 @@ def mean_tensor(x) -> Tensor:
     )
     return Tensor(res, device=t_x.device)
 
-def matmul_relu(A, B) -> Tensor:
+def matmul_relu(A, B):
+    if hasattr(A, "graph") or hasattr(B, "graph"):
+        return (A @ B).relu()
     t_A = _to_tensor(A)
     t_B = _to_tensor(B)
     M, K = t_A.shape
@@ -532,12 +631,12 @@ def matmul_relu(A, B) -> Tensor:
     if use_gpu:
         g_A = t_A.to(Device.GPU)
         g_B = t_B.to(Device.GPU)
-        C_ptr = _rt.lib.forge_gpu_malloc(M * N * 4)
+        C_ptr = _rt.mempool.allocate(M * N * 4, _rt.lib)
         _rt.lib.forge_gpu_matmul_relu_fused(g_A.gpu_ptr, g_B.gpu_ptr, C_ptr, M, K, N)
         _rt.lib.forge_gpu_sync()
         out_arr = np.empty((M, N), dtype=np.float32)
         _rt.lib.forge_gpu_memcpy_to_host(out_arr.ctypes.data_as(ctypes.c_void_p), C_ptr, M * N * 4)
-        _rt.lib.forge_gpu_free(C_ptr)
+        _rt.mempool.free(C_ptr, M * N * 4)
         return Tensor(out_arr, device=Device.GPU)
     else:
         out_arr = np.empty((M, N), dtype=np.float32)
@@ -554,7 +653,9 @@ def matmul_relu(A, B) -> Tensor:
         )
         return Tensor(out_arr, device=Device.CPU)
 
-def matmul_add(A, B, bias) -> Tensor:
+def matmul_add(A, B, bias):
+    if hasattr(A, "graph") or hasattr(B, "graph") or hasattr(bias, "graph"):
+        return A @ B + bias
     t_A = _to_tensor(A)
     t_B = _to_tensor(B)
     t_bias = _to_tensor(bias)
@@ -565,12 +666,12 @@ def matmul_add(A, B, bias) -> Tensor:
         g_A = t_A.to(Device.GPU)
         g_B = t_B.to(Device.GPU)
         g_bias = t_bias.to(Device.GPU)
-        C_ptr = _rt.lib.forge_gpu_malloc(M * N * 4)
+        C_ptr = _rt.mempool.allocate(M * N * 4, _rt.lib)
         _rt.lib.forge_gpu_matmul_add_fused(g_A.gpu_ptr, g_B.gpu_ptr, g_bias.gpu_ptr, C_ptr, M, K, N)
         _rt.lib.forge_gpu_sync()
         out_arr = np.empty((M, N), dtype=np.float32)
         _rt.lib.forge_gpu_memcpy_to_host(out_arr.ctypes.data_as(ctypes.c_void_p), C_ptr, M * N * 4)
-        _rt.lib.forge_gpu_free(C_ptr)
+        _rt.mempool.free(C_ptr, M * N * 4)
         return Tensor(out_arr, device=Device.GPU)
     else:
         out_arr = np.empty((M, N), dtype=np.float32)
@@ -583,7 +684,9 @@ def matmul_add(A, B, bias) -> Tensor:
         )
         return Tensor(out_arr, device=Device.CPU)
 
-def matmul_add_relu(A, B, bias) -> Tensor:
+def matmul_add_relu(A, B, bias):
+    if hasattr(A, "graph") or hasattr(B, "graph") or hasattr(bias, "graph"):
+        return (A @ B + bias).relu()
     t_A = _to_tensor(A)
     t_B = _to_tensor(B)
     t_bias = _to_tensor(bias)
@@ -594,12 +697,12 @@ def matmul_add_relu(A, B, bias) -> Tensor:
         g_A = t_A.to(Device.GPU)
         g_B = t_B.to(Device.GPU)
         g_bias = t_bias.to(Device.GPU)
-        C_ptr = _rt.lib.forge_gpu_malloc(M * N * 4)
+        C_ptr = _rt.mempool.allocate(M * N * 4, _rt.lib)
         _rt.lib.forge_gpu_matmul_add_relu_fused(g_A.gpu_ptr, g_B.gpu_ptr, g_bias.gpu_ptr, C_ptr, M, K, N)
         _rt.lib.forge_gpu_sync()
         out_arr = np.empty((M, N), dtype=np.float32)
         _rt.lib.forge_gpu_memcpy_to_host(out_arr.ctypes.data_as(ctypes.c_void_p), C_ptr, M * N * 4)
-        _rt.lib.forge_gpu_free(C_ptr)
+        _rt.mempool.free(C_ptr, M * N * 4)
         return Tensor(out_arr, device=Device.GPU)
     else:
         out_arr = np.empty((M, N), dtype=np.float32)
@@ -611,4 +714,73 @@ def matmul_add_relu(A, B, bias) -> Tensor:
             M, K, N
         )
         return Tensor(out_arr, device=Device.CPU)
+
+def matmul_add_relu_residual(A, B, bias, residual):
+    if hasattr(A, "graph") or hasattr(B, "graph") or hasattr(bias, "graph") or hasattr(residual, "graph"):
+        return (A @ B + bias).relu() + residual
+    t_A = _to_tensor(A)
+    t_B = _to_tensor(B)
+    t_bias = _to_tensor(bias)
+    t_res = _to_tensor(residual)
+    M, K = t_A.shape
+    _, N = t_B.shape
+    use_gpu = (t_A.device == Device.GPU or t_B.device == Device.GPU) and is_gpu_available()
+    if use_gpu:
+        g_A = t_A.to(Device.GPU)
+        g_B = t_B.to(Device.GPU)
+        g_bias = t_bias.to(Device.GPU)
+        g_res = t_res.to(Device.GPU)
+        C_ptr = _rt.mempool.allocate(M * N * 4, _rt.lib)
+        _rt.lib.forge_gpu_matmul_add_relu_residual_fused(g_A.gpu_ptr, g_B.gpu_ptr, g_bias.gpu_ptr, g_res.gpu_ptr, C_ptr, M, K, N)
+        _rt.lib.forge_gpu_sync()
+        out_arr = np.empty((M, N), dtype=np.float32)
+        _rt.lib.forge_gpu_memcpy_to_host(out_arr.ctypes.data_as(ctypes.c_void_p), C_ptr, M * N * 4)
+        _rt.mempool.free(C_ptr, M * N * 4)
+        return Tensor(out_arr, device=Device.GPU)
+    else:
+        out_arr = np.empty((M, N), dtype=np.float32)
+        _rt.lib.cpu_matmul_add_relu_residual(
+            t_A.numpy().ctypes.data_as(ctypes.c_void_p),
+            t_B.numpy().ctypes.data_as(ctypes.c_void_p),
+            t_bias.numpy().ctypes.data_as(ctypes.c_void_p),
+            t_res.numpy().ctypes.data_as(ctypes.c_void_p),
+            out_arr.ctypes.data_as(ctypes.c_void_p),
+            M, K, N
+        )
+        return Tensor(out_arr, device=Device.CPU)
+
+def add_relu(A, B):
+    if hasattr(A, "graph") or hasattr(B, "graph"):
+        return (A + B).relu()
+    t_A = _to_tensor(A)
+    t_B = _to_tensor(B)
+    n = int(np.prod(t_A.shape))
+    use_gpu = (t_A.device == Device.GPU or t_B.device == Device.GPU) and is_gpu_available()
+    if use_gpu:
+        g_A = t_A.to(Device.GPU)
+        g_B = t_B.to(Device.GPU)
+        C_ptr = _rt.mempool.allocate(n * 4, _rt.lib)
+        _rt.lib.forge_gpu_add_relu_fused(g_A.gpu_ptr, g_B.gpu_ptr, C_ptr, n)
+        _rt.lib.forge_gpu_sync()
+        out_arr = np.empty(t_A.shape, dtype=np.float32)
+        _rt.lib.forge_gpu_memcpy_to_host(out_arr.ctypes.data_as(ctypes.c_void_p), C_ptr, n * 4)
+        _rt.mempool.free(C_ptr, n * 4)
+        return Tensor(out_arr, device=Device.GPU)
+    else:
+        out_arr = np.empty(t_A.shape, dtype=np.float32)
+        _rt.lib.cpu_add_relu(
+            t_A.numpy().ctypes.data_as(ctypes.c_void_p),
+            t_B.numpy().ctypes.data_as(ctypes.c_void_p),
+            out_arr.ctypes.data_as(ctypes.c_void_p),
+            n
+        )
+        return Tensor(out_arr, device=Device.CPU)
+
+def memory_stats() -> Dict[str, int]:
+    return _rt.mempool.stats()
+
+def memory_clear():
+    if _rt.lib:
+        _rt.mempool.clear(_rt.lib)
+
 

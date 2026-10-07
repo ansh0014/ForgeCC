@@ -64,6 +64,8 @@ struct CudaDriverAPI {
     CUfunction fn_matmul_relu = nullptr;
     CUfunction fn_matmul_add = nullptr;
     CUfunction fn_matmul_add_relu = nullptr;
+    CUfunction fn_matmul_add_relu_residual = nullptr;
+    CUfunction fn_add_relu = nullptr;
 };
 
 static CudaDriverAPI g_cuda;
@@ -456,6 +458,114 @@ static const char* kPtxSource =
 "    st.global.f32 [%rd24], %f7;\n"
 "FUSED_ADD_RELU_DONE:\n"
 "    ret;\n"
+"}\n"
+"\n"
+".visible .entry gpu_matmul_add_relu_residual_kernel(\n"
+"    .param .u64 param_A,\n"
+"    .param .u64 param_B,\n"
+"    .param .u64 param_bias,\n"
+"    .param .u64 param_residual,\n"
+"    .param .u64 param_C,\n"
+"    .param .s64 param_M,\n"
+"    .param .s64 param_K,\n"
+"    .param .s64 param_N\n"
+") {\n"
+"    .reg .b32 %r<10>;\n"
+"    .reg .b64 %rd<36>;\n"
+"    .reg .f32 %f<12>;\n"
+"    .reg .pred %p<10>;\n"
+"    ld.param.u64 %rd1, [param_A];\n"
+"    ld.param.u64 %rd2, [param_B];\n"
+"    ld.param.u64 %rd3, [param_bias];\n"
+"    ld.param.u64 %rd4, [param_residual];\n"
+"    ld.param.u64 %rd5, [param_C];\n"
+"    ld.param.s64 %rd6, [param_M];\n"
+"    ld.param.s64 %rd7, [param_K];\n"
+"    ld.param.s64 %rd8, [param_N];\n"
+"    mov.u32 %r1, %ctaid.x;\n"
+"    mov.u32 %r2, %ntid.x;\n"
+"    mov.u32 %r3, %tid.x;\n"
+"    mad.lo.u32 %r4, %r1, %r2, %r3;\n"
+"    cvt.s64.s32 %rd9, %r4;\n"
+"    mov.u32 %r5, %ctaid.y;\n"
+"    mov.u32 %r6, %ntid.y;\n"
+"    mov.u32 %r7, %tid.y;\n"
+"    mad.lo.u32 %r8, %r5, %r6, %r7;\n"
+"    cvt.s64.s32 %rd10, %r8;\n"
+"    setp.ge.s64 %p1, %rd10, %rd6;\n"
+"    setp.ge.s64 %p2, %rd9, %rd8;\n"
+"    or.pred %p3, %p1, %p2;\n"
+"    @%p3 bra FUSED_RESIDUAL_DONE;\n"
+"    mov.f32 %f1, 0f00000000;\n"
+"    mov.s64 %rd11, 0;\n"
+"FUSED_RESIDUAL_LOOP:\n"
+"    setp.ge.s64 %p4, %rd11, %rd7;\n"
+"    @%p4 bra FUSED_RESIDUAL_LOOP_END;\n"
+"    mul.lo.s64 %rd12, %rd10, %rd7;\n"
+"    add.s64 %rd13, %rd12, %rd11;\n"
+"    shl.b64 %rd14, %rd13, 2;\n"
+"    add.s64 %rd15, %rd1, %rd14;\n"
+"    ld.global.f32 %f2, [%rd15];\n"
+"    mul.lo.s64 %rd16, %rd11, %rd8;\n"
+"    add.s64 %rd17, %rd16, %rd9;\n"
+"    shl.b64 %rd18, %rd17, 2;\n"
+"    add.s64 %rd19, %rd2, %rd18;\n"
+"    ld.global.f32 %f3, [%rd19];\n"
+"    fma.rn.f32 %f1, %f2, %f3, %f1;\n"
+"    add.s64 %rd11, %rd11, 1;\n"
+"    bra FUSED_RESIDUAL_LOOP;\n"
+"FUSED_RESIDUAL_LOOP_END:\n"
+"    shl.b64 %rd20, %rd9, 2;\n"
+"    add.s64 %rd21, %rd3, %rd20;\n"
+"    ld.global.f32 %f4, [%rd21];\n"
+"    add.f32 %f5, %f1, %f4;\n"
+"    mov.f32 %f6, 0f00000000;\n"
+"    max.f32 %f7, %f5, %f6;\n"
+"    mul.lo.s64 %rd22, %rd10, %rd8;\n"
+"    add.s64 %rd23, %rd22, %rd9;\n"
+"    shl.b64 %rd24, %rd23, 2;\n"
+"    add.s64 %rd25, %rd4, %rd24;\n"
+"    ld.global.f32 %f8, [%rd25];\n"
+"    add.f32 %f9, %f7, %f8;\n"
+"    add.s64 %rd26, %rd5, %rd24;\n"
+"    st.global.f32 [%rd26], %f9;\n"
+"FUSED_RESIDUAL_DONE:\n"
+"    ret;\n"
+"}\n"
+"\n"
+".visible .entry gpu_add_relu_kernel(\n"
+"    .param .u64 param_a,\n"
+"    .param .u64 param_b,\n"
+"    .param .u64 param_out,\n"
+"    .param .s64 param_N\n"
+") {\n"
+"    .reg .b32 %r<6>;\n"
+"    .reg .b64 %rd<12>;\n"
+"    .reg .f32 %f<6>;\n"
+"    .reg .pred %p<4>;\n"
+"    ld.param.u64 %rd1, [param_a];\n"
+"    ld.param.u64 %rd2, [param_b];\n"
+"    ld.param.u64 %rd3, [param_out];\n"
+"    ld.param.s64 %rd4, [param_N];\n"
+"    mov.u32 %r1, %ctaid.x;\n"
+"    mov.u32 %r2, %ntid.x;\n"
+"    mov.u32 %r3, %tid.x;\n"
+"    mad.lo.u32 %r4, %r1, %r2, %r3;\n"
+"    cvt.s64.s32 %rd5, %r4;\n"
+"    setp.ge.s64 %p1, %rd5, %rd4;\n"
+"    @%p1 bra ADD_RELU_DONE;\n"
+"    shl.b64 %rd6, %rd5, 2;\n"
+"    add.s64 %rd7, %rd1, %rd6;\n"
+"    ld.global.f32 %f1, [%rd7];\n"
+"    add.s64 %rd8, %rd2, %rd6;\n"
+"    ld.global.f32 %f2, [%rd8];\n"
+"    add.f32 %f3, %f1, %f2;\n"
+"    mov.f32 %f4, 0f00000000;\n"
+"    max.f32 %f5, %f3, %f4;\n"
+"    add.s64 %rd9, %rd3, %rd6;\n"
+"    st.global.f32 [%rd9], %f5;\n"
+"ADD_RELU_DONE:\n"
+"    ret;\n"
 "}\n";
 
 void init_driver() {
@@ -537,9 +647,12 @@ void init_driver() {
     g_cuda.cuModuleGetFunction(&g_cuda.fn_matmul_relu, g_cuda.module, "gpu_matmul_relu_kernel");
     g_cuda.cuModuleGetFunction(&g_cuda.fn_matmul_add, g_cuda.module, "gpu_matmul_add_kernel");
     g_cuda.cuModuleGetFunction(&g_cuda.fn_matmul_add_relu, g_cuda.module, "gpu_matmul_add_relu_kernel");
+    g_cuda.cuModuleGetFunction(&g_cuda.fn_matmul_add_relu_residual, g_cuda.module, "gpu_matmul_add_relu_residual_kernel");
+    g_cuda.cuModuleGetFunction(&g_cuda.fn_add_relu, g_cuda.module, "gpu_add_relu_kernel");
 
     g_cuda.available = (g_cuda.fn_matmul && g_cuda.fn_relu && g_cuda.fn_add &&
-                        g_cuda.fn_matmul_relu && g_cuda.fn_matmul_add && g_cuda.fn_matmul_add_relu);
+                        g_cuda.fn_matmul_relu && g_cuda.fn_matmul_add && g_cuda.fn_matmul_add_relu &&
+                        g_cuda.fn_matmul_add_relu_residual && g_cuda.fn_add_relu);
 }
 
 }
@@ -735,6 +848,41 @@ void forge_gpu_matmul_add_relu_fused(const float* A, const float* B, const float
 
     void* args[] = { &d_A, &d_B, &d_bias, &d_C, &M, &K, &N };
     g_cuda.cuLaunchKernel(g_cuda.fn_matmul_add_relu, gridX, gridY, 1, blockX, blockY, 1, 0, nullptr, args, nullptr);
+}
+
+void forge_gpu_matmul_add_relu_residual_fused(const float* A, const float* B, const float* bias, const float* residual, float* C,
+                                              int64_t M, int64_t K, int64_t N) {
+    init_driver();
+    if (!g_cuda.available) return;
+
+    CUdeviceptr d_A        = reinterpret_cast<CUdeviceptr>(A);
+    CUdeviceptr d_B        = reinterpret_cast<CUdeviceptr>(B);
+    CUdeviceptr d_bias     = reinterpret_cast<CUdeviceptr>(bias);
+    CUdeviceptr d_residual = reinterpret_cast<CUdeviceptr>(residual);
+    CUdeviceptr d_C        = reinterpret_cast<CUdeviceptr>(C);
+
+    unsigned int blockX = 16;
+    unsigned int blockY = 16;
+    unsigned int gridX  = (static_cast<unsigned int>(N) + blockX - 1) / blockX;
+    unsigned int gridY  = (static_cast<unsigned int>(M) + blockY - 1) / blockY;
+
+    void* args[] = { &d_A, &d_B, &d_bias, &d_residual, &d_C, &M, &K, &N };
+    g_cuda.cuLaunchKernel(g_cuda.fn_matmul_add_relu_residual, gridX, gridY, 1, blockX, blockY, 1, 0, nullptr, args, nullptr);
+}
+
+void forge_gpu_add_relu_fused(const float* a, const float* b, float* out, int64_t n) {
+    init_driver();
+    if (!g_cuda.available) return;
+
+    CUdeviceptr d_a   = reinterpret_cast<CUdeviceptr>(a);
+    CUdeviceptr d_b   = reinterpret_cast<CUdeviceptr>(b);
+    CUdeviceptr d_out = reinterpret_cast<CUdeviceptr>(out);
+
+    unsigned int blockSize = 256;
+    unsigned int gridSize  = (static_cast<unsigned int>(n) + blockSize - 1) / blockSize;
+
+    void* args[] = { &d_a, &d_b, &d_out, &n };
+    g_cuda.cuLaunchKernel(g_cuda.fn_add_relu, gridSize, 1, 1, blockSize, 1, 1, 0, nullptr, args, nullptr);
 }
 
 }

@@ -123,4 +123,27 @@ void cpu_matmul_add_relu(const float* A, const float* B, const float* bias, floa
     }
 }
 
+void cpu_matmul_add_relu_residual(const float* A, const float* B, const float* bias, const float* residual, float* C,
+                                  int64_t M, int64_t K, int64_t N) {
+    for (int64_t i = 0; i < M; ++i) {
+        for (int64_t j = 0; j < N; ++j) {
+            float sum = 0.0f;
+            for (int64_t k = 0; k < K; ++k) {
+                sum += A[i * K + k] * B[k * N + j];
+            }
+            float val = sum + bias[j];
+            float activated = (val > 0.0f) ? val : 0.0f;
+            C[i * N + j] = activated + residual[i * N + j];
+        }
+    }
 }
+
+void cpu_add_relu(const float* a, const float* b, float* out, int64_t n) {
+    for (int64_t i = 0; i < n; ++i) {
+        float val = a[i] + b[i];
+        out[i] = (val > 0.0f) ? val : 0.0f;
+    }
+}
+
+}
+

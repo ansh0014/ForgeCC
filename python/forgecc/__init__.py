@@ -17,7 +17,11 @@ from .core import (
     mean_tensor as mean,
     matmul_relu,
     matmul_add,
-    matmul_add_relu
+    matmul_add_relu,
+    matmul_add_relu_residual,
+    add_relu,
+    memory_stats,
+    memory_clear
 )
 
 from .ir import (
@@ -59,6 +63,10 @@ __all__ = [
     "matmul_relu",
     "matmul_add",
     "matmul_add_relu",
+    "matmul_add_relu_residual",
+    "add_relu",
+    "memory_stats",
+    "memory_clear",
     "OpKind",
     "Value",
     "Node",
@@ -75,3 +83,4 @@ __all__ = [
     "compile",
     "CompiledGraph"
 ]
+
