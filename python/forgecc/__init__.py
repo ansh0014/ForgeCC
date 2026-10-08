@@ -21,7 +21,10 @@ from .core import (
     matmul_add_relu_residual,
     add_relu,
     memory_stats,
-    memory_clear
+    memory_clear,
+    get_device_properties,
+    auto_tune_elementwise,
+    auto_tune_matmul
 )
 
 from .ir import (
@@ -40,6 +43,11 @@ from .ir import (
     trace,
     compile,
     CompiledGraph
+)
+
+from .onnx_frontend import (
+    from_onnx,
+    compile_onnx
 )
 
 __version__ = "0.1.4"
@@ -67,6 +75,11 @@ __all__ = [
     "add_relu",
     "memory_stats",
     "memory_clear",
+    "get_device_properties",
+    "auto_tune_elementwise",
+    "auto_tune_matmul",
+    "from_onnx",
+    "compile_onnx",
     "OpKind",
     "Value",
     "Node",
@@ -83,4 +96,3 @@ __all__ = [
     "compile",
     "CompiledGraph"
 ]
-

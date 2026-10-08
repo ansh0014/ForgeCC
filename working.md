@@ -10,9 +10,9 @@ ForgeCC is a framework-independent ML compiler designed to bridge high-level mac
 
 ```text
 Total Phases Planned:   10
-Phases Completed:        6 (60%)
-Phases Remaining:        4 (40%)
-Current Target:          Phase 7 (Hardware-Aware Auto-Tuning) & Phase 8 (ONNX Model Import Frontend)
+Phases Completed:        8 (80%)
+Phases Remaining:        2 (20%)
+Current Target:          Phase 9 (PyTorch & Framework Adapters) & Phase 10 (Autograd & Training Optimization)
 ```
 
 | Phase | Title | Status | Deliverables / Verification |
@@ -23,8 +23,8 @@ Current Target:          Phase 7 (Hardware-Aware Auto-Tuning) & Phase 8 (ONNX Mo
 | **Phase 4** | **CUDA CodeGen Backend** | **Completed** | Dynamic PTX code generation, JIT driver loader (`nvcuda.dll`), direct GPU launch without external CUDA toolkit dependency. |
 | **Phase 5** | **Advanced Operator Fusion** | **Completed** | Multi-input epilogue fusion, residual add fusion (`matmul_add_relu_residual`), broadcasted matrix-vector bias fusion, activation fusion (`add_relu`). |
 | **Phase 6** | **Tiling + GPU Memory Optimization** | **Completed** | Persistent bucketed VRAM memory pool (`GPUMemoryPool`), cached buffer reuse, `memory_stats()`, `memory_clear()`. |
-| **Phase 7** | **Hardware-Aware Auto-Tuning** | **Pending** | Target GPU property inspection (SM count, shared memory limits, register limits), dynamic launch configuration selection. |
-| **Phase 8** | **ONNX Model Import** | **Pending** | ONNX protobuf reader, converting `.onnx` model graphs into ForgeCC IR. |
+| **Phase 7** | **Hardware-Aware Auto-Tuning** | **Completed** | Dynamic GPU device property query (`get_device_properties`), elementwise occupancy tuning (`auto_tune_elementwise`), matrix tile tuning (`auto_tune_matmul`). |
+| **Phase 8** | **ONNX Model Import** | **Completed** | Built-in zero-dependency ONNX Protobuf graph parser (`from_onnx`, `compile_onnx`), multi-layer model import and compilation. |
 | **Phase 9** | **PyTorch & Framework Adapters** | **Pending** | `torch.compile` backend adapter, PyTorch module tracing decorator. |
 | **Phase 10** | **Autograd & Training Optimization** | **Pending** | Backward pass computation tape, loss functions, GPU Adam/SGD weight update kernels. |
 
@@ -62,17 +62,17 @@ Current Target:          Phase 7 (Hardware-Aware Auto-Tuning) & Phase 8 (ONNX Mo
 * **Bucketed GPU Memory Pool:** Power-of-two bucketed buffer recycling system (`GPUMemoryPool`) eliminating repetitive runtime driver allocation calls.
 * **Memory Introspection API:** Added `forgecc.memory_stats()` and `forgecc.memory_clear()` to inspect allocation caching metrics and release pooled VRAM on demand.
 
+### Phase 7: Hardware-Aware Auto-Tuning
+* **Device Introspection:** Added `forgecc.get_device_properties()` querying real hardware attributes directly through the CUDA driver (GPU name, SM count, max threads per block, shared memory, compute capability).
+* **Heuristic Block & Grid Tuner:** Dynamic launch configuration selection for elementwise operations (`forgecc.auto_tune_elementwise`) and matrix/vector products (`forgecc.auto_tune_matmul`).
+
+### Phase 8: ONNX Model Import Frontend
+* **Built-in ONNX Parser:** Standalone Protobuf wire-format parser (`python/forgecc/onnx_frontend.py`) requiring zero third-party dependencies.
+* **Model Import & Execution:** `forgecc.from_onnx()` and `forgecc.compile_onnx()` supporting multi-layer model graphs with weight initializers, inputs, outputs, and elementwise/matrix arithmetic nodes.
+
 ---
 
 ## Remaining Work Plan
-
-### Phase 7: Hardware-Aware Auto-Tuning
-* Query GPU architecture specifications (compute capability, SM count, max threads per block, register budget).
-* Automatically tune block sizes and tile configurations based on matrix dimensions and hardware limits.
-
-### Phase 8: ONNX Support
-* Add an ONNX parser frontend to load models exported from PyTorch, TensorFlow, and scikit-learn.
-* Map standard ONNX operator sets (`Gemm`, `Relu`, `Add`, `MatMul`, `Mul`) into ForgeCC Tensor IR.
 
 ### Phase 9: PyTorch / Framework Integration
 * Provide `@forgecc.compile` decorator for PyTorch `nn.Module`.

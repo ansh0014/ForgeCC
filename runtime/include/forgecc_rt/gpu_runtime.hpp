@@ -23,6 +23,24 @@ void forge_gpu_relu(const float* in, float* out, int64_t n);
 void forge_gpu_matmul_relu_fused(const float* A, const float* B, float* C,
                                  int64_t M, int64_t K, int64_t N);
 
+void forge_gpu_matmul_add_fused(const float* A, const float* B, const float* bias, float* C,
+                                int64_t M, int64_t K, int64_t N);
+
+void forge_gpu_matmul_add_relu_fused(const float* A, const float* B, const float* bias, float* C,
+                                     int64_t M, int64_t K, int64_t N);
+
+void forge_gpu_matmul_add_relu_residual_fused(const float* A, const float* B, const float* bias, const float* residual, float* C,
+                                              int64_t M, int64_t K, int64_t N);
+
+void forge_gpu_add_relu_fused(const float* a, const float* b, float* out, int64_t n);
+
+bool forge_gpu_get_device_name(char* out_name, int max_len);
+int  forge_gpu_get_attribute(int attribute);
+bool forge_gpu_get_memory_info(size_t* free_bytes, size_t* total_bytes);
+
+void forge_gpu_auto_tune_elementwise(int64_t n, unsigned int* block_size, unsigned int* grid_size);
+void forge_gpu_auto_tune_matmul(int64_t M, int64_t N, unsigned int* block_x, unsigned int* block_y, unsigned int* grid_x, unsigned int* grid_y);
+
 void forge_gpu_sync();
 
 #ifdef __cplusplus

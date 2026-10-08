@@ -97,10 +97,15 @@ class Graph:
         self.inputs.append(v)
         return v
 
-    def add_constant(self, data: np.ndarray, prefix: str = "%c") -> Value:
+    def add_constant(self, data: np.ndarray, name: Optional[str] = None, prefix: str = "%c") -> Value:
         arr = np.ascontiguousarray(data, dtype=np.float32)
+        if name:
+            v = Value(name, arr.shape, "float32", arr)
+            self.constants.append(v)
+            return v
         v = self.new_value(arr.shape, dtype="float32", prefix=prefix, const_data=arr)
         return v
+
 
     def add_node(self, op_kind: OpKind, inputs: List[Value], out_shape: tuple) -> Value:
         out_v = self.new_value(out_shape)

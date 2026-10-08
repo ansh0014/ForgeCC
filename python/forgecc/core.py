@@ -249,6 +249,27 @@ class ForgeRuntime:
             ctypes.c_int64, ctypes.c_int64, ctypes.c_int64
         ]
 
+        self.lib.forge_gpu_get_device_name.restype = ctypes.c_bool
+        self.lib.forge_gpu_get_device_name.argtypes = [ctypes.c_char_p, ctypes.c_int]
+
+        self.lib.forge_gpu_get_attribute.restype = ctypes.c_int
+        self.lib.forge_gpu_get_attribute.argtypes = [ctypes.c_int]
+
+        self.lib.forge_gpu_get_memory_info.restype = ctypes.c_bool
+        self.lib.forge_gpu_get_memory_info.argtypes = [ctypes.POINTER(ctypes.c_size_t), ctypes.POINTER(ctypes.c_size_t)]
+
+        self.lib.forge_gpu_auto_tune_elementwise.restype = None
+        self.lib.forge_gpu_auto_tune_elementwise.argtypes = [
+            ctypes.c_int64, ctypes.POINTER(ctypes.c_uint), ctypes.POINTER(ctypes.c_uint)
+        ]
+
+        self.lib.forge_gpu_auto_tune_matmul.restype = None
+        self.lib.forge_gpu_auto_tune_matmul.argtypes = [
+            ctypes.c_int64, ctypes.c_int64,
+            ctypes.POINTER(ctypes.c_uint), ctypes.POINTER(ctypes.c_uint),
+            ctypes.POINTER(ctypes.c_uint), ctypes.POINTER(ctypes.c_uint)
+        ]
+
 _rt = ForgeRuntime()
 
 def is_gpu_available() -> bool:
@@ -270,15 +291,85 @@ def memory_clear():
     if _rt.lib:
         _rt.mempool.clear(_rt.lib)
 
+def get_device_properties(device_id: int = 0) -> Dict:
+    if not is_gpu_available():
+        return {
+            "device": "CPU",
+            "available": False
+        }
+    buf = ctypes.create_string_buffer(256)
+    name = "Unknown NVIDIA GPU"
+    if _rt.lib.forge_gpu_get_device_name(buf, 256):
+        name = buf.value.decode("utf-8")
+
+    sm_count = _rt.lib.forge_gpu_get_attribute(16)
+    max_threads = _rt.lib.forge_gpu_get_attribute(1)
+    shared_mem = _rt.lib.forge_gpu_get_attribute(8)
+    warp_size = _rt.lib.forge_gpu_get_attribute(10)
+    major = _rt.lib.forge_gpu_get_attribute(75)
+    minor = _rt.lib.forge_gpu_get_attribute(76)
+
+    free_mem = ctypes.c_size_t(0)
+    total_mem = ctypes.c_size_t(0)
+    _rt.lib.forge_gpu_get_memory_info(ctypes.byref(free_mem), ctypes.byref(total_mem))
+
+    return {
+        "device": "GPU",
+        "available": True,
+        "name": name,
+        "sm_count": sm_count if sm_count > 0 else 16,
+        "max_threads_per_block": max_threads if max_threads > 0 else 1024,
+        "shared_memory_per_block": shared_mem if shared_mem > 0 else 49152,
+        "warp_size": warp_size if warp_size > 0 else 32,
+        "compute_capability": (major, minor) if major > 0 else (7, 5),
+        "free_memory_bytes": free_mem.value,
+        "total_memory_bytes": total_mem.value
+    }
+
+def auto_tune_elementwise(n: int) -> Dict[str, int]:
+    block_size = ctypes.c_uint(256)
+    grid_size = ctypes.c_uint(1)
+    if is_gpu_available():
+        _rt.lib.forge_gpu_auto_tune_elementwise(n, ctypes.byref(block_size), ctypes.byref(grid_size))
+    else:
+        block_size.value = 256
+        grid_size.value = (n + 255) // 256 if n > 0 else 1
+    return {
+        "block_size": block_size.value,
+        "grid_size": grid_size.value
+    }
+
+def auto_tune_matmul(M: int, K: int, N: int) -> Dict[str, int]:
+    block_x = ctypes.c_uint(16)
+    block_y = ctypes.c_uint(16)
+    grid_x = ctypes.c_uint(1)
+    grid_y = ctypes.c_uint(1)
+    if is_gpu_available():
+        _rt.lib.forge_gpu_auto_tune_matmul(M, N, ctypes.byref(block_x), ctypes.byref(block_y), ctypes.byref(grid_x), ctypes.byref(grid_y))
+    else:
+        block_x.value = 16
+        block_y.value = 16
+        grid_x.value = (N + 15) // 16 if N > 0 else 1
+        grid_y.value = (M + 15) // 16 if M > 0 else 1
+    return {
+        "block_x": block_x.value,
+        "block_y": block_y.value,
+        "grid_x": grid_x.value,
+        "grid_y": grid_y.value
+    }
+
+
 class Tensor:
-    def __init__(self, data, device=Device.CPU):
+    def __init__(self, data, device=Device.CPU, dtype=None):
         self.gpu_ptr = None
+        target_dtype = dtype if dtype is not None else np.float32
         if isinstance(data, np.ndarray):
-            self.host_array = np.ascontiguousarray(data, dtype=np.float32)
+            self.host_array = np.ascontiguousarray(data, dtype=target_dtype)
         elif isinstance(data, (list, tuple, float, int)):
-            self.host_array = np.ascontiguousarray(np.array(data, dtype=np.float32))
+            self.host_array = np.ascontiguousarray(np.array(data, dtype=target_dtype))
         elif isinstance(data, Tensor):
-            self.host_array = data.numpy().copy()
+            self.host_array = data.numpy().astype(target_dtype).copy()
+
         else:
             raise TypeError("Unsupported data type for Tensor initialization.")
 
@@ -387,8 +478,9 @@ class Tensor:
         dev_str = "GPU" if self.device == Device.GPU else "CPU"
         return f"forgecc.Tensor(shape={list(self.shape)}, device={dev_str}, data=\n{self.numpy()})"
 
-def tensor(data, device=Device.CPU) -> Tensor:
-    return Tensor(data, device=device)
+def tensor(data, device=Device.CPU, dtype=None) -> Tensor:
+    return Tensor(data, device=device, dtype=dtype)
+
 
 def _to_tensor(x, device=Device.CPU):
     if isinstance(x, Tensor):
