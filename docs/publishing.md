@@ -161,3 +161,23 @@ Verify in Python:
 ```cmd
 py -c "import forgecc; print('ForgeCC Version:', forgecc.__version__); print('GPU Available:', forgecc.is_gpu_available())"
 ```
+
+---
+
+## 9. Troubleshooting HTTPError: 403 Forbidden
+
+If you encounter `HTTPError: 403 Forbidden from https://upload.pypi.org/legacy/`, check the following three causes:
+
+### Cause 1: GitHub Secret is in "Environment Secrets" instead of "Repository Secrets"
+- If you added `PYPI_API_TOKEN` under **Settings -> Environments -> (Environment Name)**, GitHub Actions will pass an empty string unless your workflow explicitly declares `environment: <Environment Name>`.
+- **Fix A:** Go to **GitHub Repository Settings -> Secrets and variables -> Actions -> Repository secrets** and add `PYPI_API_TOKEN` there.
+- **Fix B:** In `.github/workflows/publish.yml`, add `environment: <your-environment-name>` under the job definition.
+
+### Cause 2: Token Scope for First-Time Upload
+- If this is the **first time** you are uploading the package `forgecc` to PyPI, a project-scoped token (`Project: forgecc`) will fail with 403 because the project does not exist yet.
+- **Fix:** On [https://pypi.org/manage/account/token/](https://pypi.org/manage/account/token/), create a new token with scope set to **Entire account (all projects)**. Use this token for the initial release. Once the package exists on PyPI, you can restrict the token scope to `Project: forgecc`.
+
+### Cause 3: Package Name Ownership on PyPI
+- If the package name `forgecc` is already registered on `pypi.org` by another user, PyPI will return 403 Forbidden.
+- Check `https://pypi.org/project/forgecc/` to verify if the project is already owned by your account.
+- If the name is taken by an unrelated account, change `name` in `python/setup.py` (e.g. `forgecc-compiler` or `forgecc-ai`).
