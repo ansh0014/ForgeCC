@@ -1,188 +1,47 @@
-# ForgeCC — High-Performance Machine Learning Compiler & Universal GPU Acceleration Engine
+# ForgeCC — High-Performance Tensor Acceleration Engine
 
-ForgeCC is a framework-independent machine learning compiler and tensor acceleration runtime designed to compile and execute high-throughput neural network operations directly on NVIDIA GPUs and multi-threaded CPUs.
-
-ForgeCC completely eliminates the multi-gigabyte CUDA Toolkit dependency by communicating directly with the native NVIDIA GPU display driver (`nvcuda.dll` on Windows, `libcuda.so` on Linux) using JIT-compiled PTX assembly.
+ForgeCC is a lightweight, high-performance tensor compiler and GPU execution engine for machine learning. It allows you to run GPU-accelerated tensor math and neural network operations directly on your NVIDIA GPU with **zero CUDA Toolkit or compiler installations**.
 
 ---
 
-## 1. System Architecture & Subsystem Workflows
+## 1. What is ForgeCC?
 
-### 1.1 Complete End-to-End System Pipeline
+When running PyTorch or TensorFlow on a GPU, developers typically need to install multi-gigabyte CUDA Toolkits, configure `nvcc` compiler paths, and manage complex build environments.
 
-```mermaid
-flowchart TD
-    subgraph Frontends["Frontend Entrypoints"]
-        A1["Python Tensor API"]
-        A2["PyTorch FX Adapter (@compile_torch_module)"]
-        A3["Binary Protobuf ONNX Parser"]
-        A4["C++ Universal Runtime API"]
-    end
-
-    subgraph Compiler["ForgeCC Compiler Core"]
-        B1["SSA IR Graph Construction"]
-        B2["Optimization Passes: Constant Folding, DCE, CSE, Alg Simp"]
-        B3["Operator Fusion Engine"]
-        B4["Hardware-Aware Auto-Tuning"]
-        B5["PTX Code Generator (sm_50+)"]
-    end
-
-    subgraph Execution["Execution Engine & Memory"]
-        C1["Bucketed GPU Memory Pool (Power-of-Two)"]
-        C2["Dynamic CUDA Driver JIT (nvcuda.dll / libcuda.so)"]
-        C3["Multi-Threaded CPU SIMD Runtime"]
-        C4["Reverse-Mode Autograd Tape & Optimizers"]
-    end
-
-    subgraph Hardware["Target Hardware"]
-        D1["NVIDIA GPU (SM 5.0+)"]
-        D2["Host CPU SIMD"]
-    end
-
-    A1 --> B1
-    A2 --> B1
-    A3 --> B1
-    B1 --> B2 --> B3 --> B4 --> B5
-    B5 --> C2
-    A4 --> C3
-    A4 --> C2
-    C2 --> C1 --> D1
-    C3 --> D2
-    C4 --> B1
-```
+ForgeCC communicates directly with your standard NVIDIA graphics card driver (`nvcuda.dll` on Windows, `libcuda.so` on Linux). It generates optimized GPU machine code on the fly and executes it immediately, delivering native GPU acceleration straight from Python.
 
 ---
 
-### 1.2 SSA IR Optimization & Fusion Pipeline
+## 2. Prerequisites & System Requirements
 
-```mermaid
-flowchart LR
-    subgraph InputGraph["Input Computation Graph"]
-        N1["MatMul Node"]
-        N2["Bias Add Node"]
-        N3["ReLU Node"]
-        N4["Residual Add Node"]
-        N1 --> N2 --> N3 --> N4
-    end
+ForgeCC is designed for instant setup with minimal requirements:
 
-    subgraph Passes["Pass Manager Pipeline"]
-        P1["Constant Folding"]
-        P2["Algebraic Simplification"]
-        P3["Common Subexpression Elimination"]
-        P4["Dead Code Elimination"]
-        P5["Register-Level Fusion Pass"]
-        P1 --> P2 --> P3 --> P4 --> P5
-    end
-
-    subgraph FusedOutput["Fused IR Representation"]
-        FN["Fused matmul_add_relu_residual Kernel"]
-    end
-
-    InputGraph --> Passes --> FusedOutput
-```
+- **Operating System:** Windows 10/11 (64-bit) or Linux (x86_64)
+- **Python:** Version 3.8 or higher
+- **NVIDIA GPU:** Any NVIDIA GPU with driver installed (GeForce, RTX, GTX, Tesla, Quadro)
+- **CUDA Toolkit Installed:** **Not required** (ForgeCC uses your existing display driver)
+- **C++ Compiler Installed:** **Not required** for Python package usage
+- **Fallback:** If no NVIDIA GPU is detected, ForgeCC automatically runs on your CPU using multi-threaded SIMD routines.
 
 ---
 
-### 1.3 Zero-SDK Dynamic CUDA Driver JIT Engine
+## 3. How ForgeCC is Different & Why Use It
 
-```mermaid
-sequenceDiagram
-    participant UserApp as "Python Application"
-    participant ForgeRuntime as "ForgeCC Runtime"
-    participant DriverAPI as "nvcuda.dll / libcuda.so"
-    participant NVGPU as "NVIDIA GPU Hardware"
+| Feature | Standard PyTorch | ForgeCC |
+| :--- | :--- | :--- |
+| **Setup Size** | Requires 2 GB – 5 GB download + CUDA SDK | Under 1 MB lightweight pip install |
+| **CUDA Toolkit Required** | Yes (`nvcc`, `cudart`, large SDK) | **No** (Direct graphics driver communication) |
+| **Kernel Execution** | Launches separate kernels with memory roundtrips | Fuses operations directly in GPU registers |
+| **ONNX Runtime** | Requires `onnx` and `protobuf` libraries | Zero dependencies built-in parser |
+| **PyTorch Acceleration** | Requires custom C++ toolchain / Triton | One-line decorator `@compile_torch_module` |
+| **CPU Fallback** | Separate CPU wheels | Automatic built-in fallback |
 
-    UserApp->>ForgeRuntime: forgecc.matmul_relu(A, B)
-    ForgeRuntime->>DriverAPI: cuModuleLoadDataEx(PTX Assembly)
-    DriverAPI->>NVGPU: JIT Compile PTX to SASS in GPU Driver
-    ForgeRuntime->>DriverAPI: Memory Pool Pointer Fetch
-    ForgeRuntime->>DriverAPI: cuLaunchKernel(Grid, Block, SharedMem, Stream, Params)
-    DriverAPI->>NVGPU: Execute Register-Fused Kernel
-    NVGPU-->>ForgeRuntime: Stream Complete
-    ForgeRuntime-->>UserApp: Return Computed Output Tensor
-```
+### Key Benefits for Daily ML Work:
 
----
-
-### 1.4 Bucketed GPU Memory Pool Lifecycle
-
-```mermaid
-stateDiagram-v2
-    state "Tensor Allocation Request (Size S)" as Req
-    state "Compute Power-of-Two Bucket (2^ceil(log2(S)))" as Bucket
-    state "Check Free Bucket List" as Check
-    state "Reuse Cached Pointer (O(1) Zero Driver Latency)" as Reuse
-    state "Allocate New Block via cuMemAlloc" as NewAlloc
-    state "Tensor Execution in Kernel" as Active
-    state "Deallocate: Return Pointer to Bucket Pool" as ReturnPool
-
-    [*] --> Req
-    Req --> Bucket
-    Bucket --> Check
-    Check --> Reuse: Available in Bucket
-    Check --> NewAlloc: Bucket Empty
-    Reuse --> Active
-    NewAlloc --> Active
-    Active --> ReturnPool: Tensor Destruction / Pool Release
-    ReturnPool --> Check: Recycled for Next Iteration
-```
-
----
-
-### 1.5 Reverse-Mode Autograd Tape & Optimizer Pipeline
-
-```mermaid
-flowchart TD
-    subgraph ForwardPass["Forward Evaluation (Graph & Tape Recording)"]
-        X["Input x"] --> M1["w1 @ x"]
-        W1["Weight w1"] --> M1
-        M1 --> R1["ReLU(z1)"]
-        R1 --> M2["w2 @ a1"]
-        W2["Weight w2"] --> M2
-        M2 --> S1["Sigmoid(z2)"]
-        S1 --> L["Loss = MSE(y_pred, y_true)"]
-    end
-
-    subgraph BackwardTape["Reverse-Mode Differentiation Tape"]
-        dL["dL / dLoss = 1.0"] --> dS["SigmoidBackward: dL/dz2"]
-        dS --> dM2["MatMulBackward: dL/dw2 & dL/da1"]
-        dM2 --> dR1["ReLUBackward: dL/dz1"]
-        dR1 --> dM1["MatMulBackward: dL/dw1 & dL/dx"]
-    end
-
-    subgraph Optimizer["Parameter Update"]
-        dM2 --> OPT["AdamW / Adam / SGD In-Place Step"]
-        dM1 --> OPT
-        OPT --> UP1["Update w1 in-place"]
-        OPT --> UP2["Update w2 in-place"]
-    end
-
-    L -.-> dL
-```
-
----
-
-## 2. Feature Comparison Matrix
-
-| Feature | Standard PyTorch / TensorFlow | TorchInductor / Triton | TensorRT | ForgeCC Compiler Engine |
-| :--- | :--- | :--- | :--- | :--- |
-| **CUDA SDK Dependency** | Requires CUDA Toolkit (3 GB – 10 GB) | Requires CUDA Toolkit + C++ Compiler | Requires CUDA Toolkit + TensorRT SDK | **Zero SDK requirement**: communicates directly with standard graphics driver |
-| **Compiler Toolchain** | Heavy native wheel builds | Requires MSVC/GCC and Triton runtime | Proprietary engine | **Zero external compiler**: generates clean PTX assembly and JIT-loads via driver API |
-| **Execution Model** | Eager kernel dispatch | JIT Triton compilation | Graph capture engine | Dynamic SSA IR JIT + Register-Fused PTX Kernels |
-| **ONNX Parsing** | Requires `onnx` and `protobuf` libraries | PyTorch importer only | TensorRT parser | **Zero-dependency binary Protobuf decoder** built directly into runtime |
-| **Memory Management** | Framework caching allocator | Framework caching allocator | Static engine workspace | **Bucketed Power-of-Two GPU Memory Pool** with zero driver reallocation |
-| **Fallback Mechanism** | Requires separate CPU builds | CPU compilation limited | No CPU fallback | **Seamless automatic fallback** to multi-threaded C++ SIMD engine |
-| **Universal API** | Python / C++ LibTorch | Python only | C++ / Python | **Unified C++ universal interface and Python package** |
-
----
-
-## 3. Core Developer Benefits
-
-1. **Instant Zero-SDK Setup:** Install with standard pip. No CUDA Toolkit, no `nvcc` path configuration, and no MSVC/GCC compiler installation required.
-2. **Register-Level Kernel Fusion:** Multi-operation sequences (such as MatMul + Bias + ReLU + Residual) execute in a single kernel launch directly inside GPU registers, eliminating intermediate global memory roundtrips.
-3. **Hardware-Aware Auto-Tuning:** Automatically queries GPU Streaming Multiprocessor (SM) counts, warp occupancy, and shared memory capacity to select optimal block and tile dimensions.
-4. **Seamless Framework Integration:** Works out of the box with pure Python, NumPy arrays, PyTorch FX graphs, and raw ONNX files.
-5. **Automatic Hardware Fallback:** Automatically detects GPU presence and routes execution to optimized multi-threaded CPU routines if an NVIDIA GPU is not found.
+1. **Instant GPU Acceleration:** Start running GPU code on any machine with an NVIDIA card immediately after `pip install forgecc`.
+2. **Reduced Memory & Higher Speed:** Fuses matrix multiplications and activations into a single GPU pass, keeping data in fast registers rather than writing back to VRAM.
+3. **Seamless PyTorch Integration:** Speed up your existing PyTorch models with a single line of code.
+4. **Zero-Dependency ONNX Inference:** Load and execute `.onnx` models without installing external runtime packages.
 
 ---
 
@@ -192,17 +51,22 @@ flowchart TD
 pip install forgecc
 ```
 
+Verify installation:
+
+```python
+import forgecc
+print("GPU Available:", forgecc.is_gpu_available())
+```
+
 ---
 
-## 5. Developer Recipes & Code Snippets
+## 5. Quickstart & Practical Examples
 
-### 5.1 Basic Tensor Arithmetic & GPU Execution
+### 5.1 Basic Tensor Operations on GPU
 
 ```python
 import forgecc
 import numpy as np
-
-print("GPU Available:", forgecc.is_gpu_available())
 
 a = forgecc.tensor([[1.0, 2.0], [3.0, 4.0]], device=forgecc.Device.GPU)
 b = forgecc.tensor([[5.0, 6.0], [7.0, 8.0]], device=forgecc.Device.GPU)
@@ -210,12 +74,14 @@ b = forgecc.tensor([[5.0, 6.0], [7.0, 8.0]], device=forgecc.Device.GPU)
 c = a @ b
 d = (c + 1.0).relu()
 
-print("Computed Output:\n", d.numpy())
+print("Result:\n", d.numpy())
 ```
 
 ---
 
-### 5.2 Direct Register-Level Operator Fusion
+### 5.2 Fast Operator Fusion (MatMul + Bias + ReLU + Residual)
+
+Instead of launching 4 separate kernels, ForgeCC executes the entire sequence in a single GPU pass:
 
 ```python
 import forgecc
@@ -228,12 +94,14 @@ bias = np.random.randn(N).astype(np.float32)
 residual = np.random.randn(M, N).astype(np.float32)
 
 output = forgecc.matmul_add_relu_residual(a, b, bias, residual)
-print("Fused Output Shape:", output.shape)
+print("Output shape:", output.shape)
 ```
 
 ---
 
-### 5.3 PyTorch Module Acceleration (`@compile_torch_module`)
+### 5.3 Accelerating Existing PyTorch Models
+
+Accelerate standard PyTorch `nn.Module` networks with zero changes to your model architecture:
 
 ```python
 import torch
@@ -250,18 +118,20 @@ class NeuralNet(nn.Module):
     def forward(self, x):
         return self.fc2(self.relu(self.fc1(x)))
 
-torch_model = NeuralNet()
-example_input = torch.randn(1, 4)
+model = NeuralNet()
+sample_input = torch.randn(1, 4)
 
-compiled_model = forgecc.compile_torch_module(torch_model, example_input, target="gpu")
-output = compiled_model(example_input)
+compiled_model = forgecc.compile_torch_module(model, sample_input, target="gpu")
+output = compiled_model(sample_input)
 
-print("Compiled Output:", output)
+print("Output:", output)
 ```
 
 ---
 
-### 5.4 Neural Network Training with Autograd & Optimizers
+### 5.4 Training Neural Networks with Autograd & Optimizers
+
+Train models using ForgeCC's built-in automatic differentiation and optimizers (SGD, Adam, AdamW):
 
 ```python
 import forgecc
@@ -273,7 +143,7 @@ y_true = forgecc.tensor([[1.0, 0.0], [0.0, 1.0], [1.0, 1.0]], requires_grad=Fals
 w1 = forgecc.tensor(np.random.randn(2, 4).astype(np.float32), requires_grad=True)
 w2 = forgecc.tensor(np.random.randn(4, 2).astype(np.float32), requires_grad=True)
 
-optimizer = forgecc.optim.AdamW([w1, w2], lr=0.01, weight_decay=0.01)
+optimizer = forgecc.optim.AdamW([w1, w2], lr=0.01)
 
 for epoch in range(50):
     optimizer.zero_grad()
@@ -292,43 +162,23 @@ for epoch in range(50):
 
 ---
 
-### 5.5 Zero-Dependency ONNX Model Import & Inference
+### 5.5 Loading and Running ONNX Models Without Dependencies
 
 ```python
 import forgecc
 
-compiled_model = forgecc.compile_onnx("model.onnx", target="gpu", optimize=True)
+model = forgecc.compile_onnx("model.onnx", target="gpu")
+input_data = forgecc.tensor([[1.0, 2.0, 3.0, 4.0]])
 
-input_tensor = forgecc.tensor([[1.0, 2.0, 3.0, 4.0]])
-output = compiled_model(input_tensor)
-
-print("ONNX Inference Output:\n", output.numpy())
+result = model(input_data)
+print("Inference Output:\n", result.numpy())
 ```
 
 ---
 
-### 5.6 SSA IR Graph Tracing & Optimization Passes
+### 5.6 C++ Native Universal API
 
-```python
-import forgecc
-
-def compute_fn(x, y):
-    z = x + y
-    w = z * 2.0
-    return w.relu()
-
-graph = forgecc.trace(compute_fn, shape=(4, 4), dtype="float32")
-print("Unoptimized Graph:\n", graph.to_string())
-
-optimized_graph = forgecc.optimize(graph)
-print("Optimized Graph:\n", optimized_graph.to_string())
-
-compiled = forgecc.compile(optimized_graph, target="gpu")
-```
-
----
-
-### 5.7 C++ Native Universal Interface
+Embed ForgeCC directly in your C++ applications:
 
 ```cpp
 #include "forgecc_rt/gpu_runtime.hpp"
@@ -368,19 +218,9 @@ int main() {
 
 ---
 
-### 5.8 Standalone Compiler CLI Interface
+## 6. GPU Performance Benchmark
 
-```cmd
-build\tools\forgecc\forgecc.exe model.fcc --emit-forge-ir
-build\tools\forgecc\forgecc.exe model.fcc --emit-ir
-build\tools\forgecc\forgecc.exe model.fcc --emit-obj -o model_out
-```
-
----
-
-## 6. GPU Performance Benchmarking
-
-### Benchmarking Fused Execution vs. Standard Eager Frameworks
+Compare standard unfused PyTorch execution against ForgeCC fused kernel execution:
 
 ```python
 import time
@@ -419,7 +259,7 @@ print(f"Speedup: {pytorch_time / forgecc_time:.2f}x faster")
 print("=" * 55)
 ```
 
-### Hardware Monitoring During Execution
+Monitor GPU load while running:
 
 ```powershell
 nvidia-smi --query-gpu=utilization.gpu,memory.used,memory.free --format=csv -l 1
