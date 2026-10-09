@@ -284,3 +284,27 @@ for epoch in range(50):
 | **Operator Fusion** | Separate kernel launches or runtime JIT overhead | Direct register-level multi-input epilogue & residual fusion |
 | **GPU Memory** | Frequent driver allocation requests | Bucketed power-of-two VRAM memory pool with instant buffer reuse |
 | **Framework Interop** | Siloed ecosystem | Native PyTorch FX adapter and standalone Python API |
+
+---
+
+## 7. Package Distribution and PyPI Release
+
+ForgeCC is packaged and distributed as a wheel and source distribution to PyPI (`pypi.org`):
+
+### 1. Build Shared Library & Distribution
+```cmd
+cmake --build build --target forgecc_rt_shared
+Copy-Item build/runtime/libforgecc_rt.dll python/forgecc/libforgecc_rt.dll -Force
+cd python
+py -m build
+cd ..
+```
+
+### 2. Configure Token & Upload to PyPI
+```cmd
+set TWINE_USERNAME=__token__
+set TWINE_PASSWORD=pypi-YOUR_EXACT_PYPI_API_TOKEN_HERE
+py -m twine upload python/dist/*
+```
+
+For complete step-by-step instructions and TestPyPI staging configuration, refer to [`docs/publishing.md`](docs/publishing.md).

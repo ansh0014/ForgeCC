@@ -6,7 +6,7 @@ ForgeCC is a framework-independent machine learning compiler and high-throughput
 
 ## Key Highlights
 
-- **Zero-SDK CUDA Acceleration:** Uses a direct dynamic loader for the NVIDIA display driver (`nvcuda.dll` on Windows, `libcuda.so` on Linux) with embedded and JIT-compiled PTX assembly. Runs on any system with NVIDIA drivers installed without requiring the CUDA Toolkit or `nvcc`.
+- **Zero-SDK CUDA Acceleration:** Direct dynamic loader for the NVIDIA display driver (`nvcuda.dll` on Windows, `libcuda.so` on Linux) with embedded and JIT-compiled PTX assembly. Runs on any system with NVIDIA drivers installed without requiring the CUDA Toolkit or `nvcc`.
 - **Static Single Assignment (SSA) Tensor IR:** Represents computation graphs as pure functional SSA graphs supporting graph tracing, serialization, and hardware-targeted code generation.
 - **Compiler Optimization Pipeline:** Modular `PassManager` executing Constant Folding, Algebraic Simplification ($x + 0 \to x$, $x \times 1 \to x$), Common Subexpression Elimination (CSE), and Dead Code Elimination (DCE).
 - **Register-Level Operator Fusion:** Epilogue and residual fusion (`matmul_add_relu_residual` and `add_relu`) executing multi-operator sequences in hardware registers to eliminate intermediate global memory traffic.
@@ -100,7 +100,7 @@ ForgeCC is verified against a 14-category testing plan ([`docs/test_results.md`]
 - **Operating System:** Windows 10/11 or Linux
 - **C++ Compiler:** GCC / G++ (C++17 support) or MSVC
 - **CMake:** 3.20+
-- **Python:** 3.9+
+- **Python:** 3.8+
 - **NVIDIA GPU:** Any Kepler / Maxwell / Pascal / Volta / Turing / Ampere / Ada / Blackwell GPU with display drivers installed.
 
 ### Native Runtime Build
@@ -204,12 +204,37 @@ for epoch in range(20):
 
 ---
 
+## PyPI Publishing
+
+To publish `forgecc` to PyPI ([`pypi.org`](https://pypi.org)):
+
+1. Set your PyPI API token:
+   ```cmd
+   set TWINE_USERNAME=__token__
+   set TWINE_PASSWORD=pypi-YOUR_EXACT_PYPI_API_TOKEN_HERE
+   ```
+2. Build the distribution packages:
+   ```cmd
+   cd python
+   py -m build
+   cd ..
+   ```
+3. Upload to PyPI using Twine:
+   ```cmd
+   py -m twine upload python/dist/*
+   ```
+
+For detailed instructions and TestPyPI staging configuration, see [`docs/publishing.md`](docs/publishing.md).
+
+---
+
 ## Documentation
 
 - [`whole.md`](whole.md) — Comprehensive technical architecture, compiler pipeline, and subsystem guide.
 - [`working.md`](working.md) — 10-Phase roadmap milestone tracking dashboard.
 - [`validation_report.md`](validation_report.md) — Detailed execution log of the T01–T14 test suite.
 - [`docs/test_results.md`](docs/test_results.md) — Official test verification data and benchmarks.
+- [`docs/publishing.md`](docs/publishing.md) — Step-by-step PyPI release and token configuration guide.
 
 ---
 
