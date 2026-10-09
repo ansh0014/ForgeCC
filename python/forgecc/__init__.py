@@ -75,7 +75,7 @@ from . import optim
 from . import adapters
 from . import autograd
 
-__version__ = "0.2.4"
+__version__ = "0.2.5"
 __all__ = [
     "Device",
     "is_gpu_available",

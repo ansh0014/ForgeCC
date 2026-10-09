@@ -17,6 +17,20 @@ ForgeCC enables instant GPU execution for deep learning operations without requi
 
 ---
 
+## Feature Comparison Matrix
+
+| Feature | Standard PyTorch / TensorFlow | TorchInductor / Triton | TensorRT | ForgeCC Compiler Engine |
+| :--- | :--- | :--- | :--- | :--- |
+| **CUDA SDK Dependency** | Requires CUDA Toolkit (3 GB – 10 GB) | Requires CUDA Toolkit + C++ Compiler | Requires CUDA Toolkit + TensorRT SDK | **Zero SDK requirement**: communicates directly with standard graphics driver |
+| **Compiler Toolchain** | Heavy native wheel builds | Requires MSVC/GCC and Triton runtime | Proprietary engine | **Zero external compiler**: generates clean PTX assembly and JIT-loads via driver API |
+| **Execution Model** | Eager kernel dispatch | JIT Triton compilation | Graph capture engine | **Dynamic SSA IR JIT + Register-Fused PTX Kernels** |
+| **ONNX Parsing** | Requires `onnx` and `protobuf` libraries | PyTorch importer only | TensorRT parser | **Zero-dependency binary Protobuf decoder** built directly into runtime |
+| **Memory Management** | Framework caching allocator | Framework caching allocator | Static engine workspace | **Bucketed Power-of-Two GPU Memory Pool** with zero driver reallocation |
+| **Fallback Mechanism** | Requires separate CPU builds | CPU compilation limited | No CPU fallback | **Seamless automatic fallback** to multi-threaded C++ SIMD engine |
+| **Universal API** | Python / C++ LibTorch | Python only | C++ / Python | **Unified C++ universal interface and Python package** |
+
+---
+
 ## Prerequisites
 
 - **Operating System:** Windows 10 / 11 (64-bit) or Linux (x86_64)

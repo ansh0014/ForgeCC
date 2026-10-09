@@ -9,9 +9,10 @@ if os.path.exists(readme_path):
     with open(readme_path, "r", encoding="utf-8") as f:
         long_description = f.read()
 
+
 setup(
     name="forgecc",
-    version="0.2.4",
+    version="0.2.5",
     description="High-Performance ML Compiler and Universal GPU Execution Engine",
     long_description=long_description,
     long_description_content_type="text/markdown",
