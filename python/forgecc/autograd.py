@@ -53,19 +53,6 @@ class MatMulBackward(GradFn):
 
         return [grad_A, grad_B]
 
-def _reduce_grad_shape(grad_arr: np.ndarray, target_shape: tuple) -> np.ndarray:
-    if grad_arr.shape == target_shape:
-        return grad_arr
-    g = grad_arr
-    while len(g.shape) > len(target_shape):
-        g = np.sum(g, axis=0)
-    for i, (gd, td) in enumerate(zip(g.shape, target_shape)):
-        if td == 1 and gd > 1:
-            g = np.sum(g, axis=i, keepdims=True)
-    if g.shape != target_shape:
-        g = np.reshape(g, target_shape)
-    return g
-
 class AddBackward(GradFn):
     def __init__(self, A: Tensor, B: Tensor):
         super().__init__()
@@ -73,9 +60,8 @@ class AddBackward(GradFn):
         self.B = B
 
     def backward(self, grad_output: Tensor) -> List[Optional[Tensor]]:
-        g_arr = grad_output.numpy()
-        grad_A = Tensor(_reduce_grad_shape(g_arr, self.A.shape), device=self.A.device) if self.A.requires_grad else None
-        grad_B = Tensor(_reduce_grad_shape(g_arr, self.B.shape), device=self.B.device) if self.B.requires_grad else None
+        grad_A = grad_output if self.A.requires_grad else None
+        grad_B = grad_output if self.B.requires_grad else None
         return [grad_A, grad_B]
 
 class SubBackward(GradFn):
@@ -85,9 +71,10 @@ class SubBackward(GradFn):
         self.B = B
 
     def backward(self, grad_output: Tensor) -> List[Optional[Tensor]]:
-        g_arr = grad_output.numpy()
-        grad_A = Tensor(_reduce_grad_shape(g_arr, self.A.shape), device=self.A.device) if self.A.requires_grad else None
-        grad_B = Tensor(_reduce_grad_shape(-g_arr, self.B.shape), device=self.B.device) if self.B.requires_grad else None
+        grad_A = grad_output if self.A.requires_grad else None
+        grad_B = None
+        if self.B.requires_grad:
+            grad_B = Tensor(-grad_output.numpy(), device=self.B.device)
         return [grad_A, grad_B]
 
 class MulBackward(GradFn):
@@ -99,13 +86,10 @@ class MulBackward(GradFn):
     def backward(self, grad_output: Tensor) -> List[Optional[Tensor]]:
         grad_A = None
         grad_B = None
-        g_arr = grad_output.numpy()
         if self.A.requires_grad:
-            g_A = _reduce_grad_shape(g_arr * self.B.numpy(), self.A.shape)
-            grad_A = Tensor(g_A, device=self.A.device)
+            grad_A = Tensor(grad_output.numpy() * self.B.numpy(), device=self.A.device)
         if self.B.requires_grad:
-            g_B = _reduce_grad_shape(g_arr * self.A.numpy(), self.B.shape)
-            grad_B = Tensor(g_B, device=self.B.device)
+            grad_B = Tensor(grad_output.numpy() * self.A.numpy(), device=self.B.device)
         return [grad_A, grad_B]
 
 class DivBackward(GradFn):
@@ -121,11 +105,9 @@ class DivBackward(GradFn):
         g_arr = grad_output.numpy()
         a_arr = self.A.numpy()
         if self.A.requires_grad:
-            g_A = _reduce_grad_shape(g_arr / b_arr, self.A.shape)
-            grad_A = Tensor(g_A, device=self.A.device)
+            grad_A = Tensor(g_arr / b_arr, device=self.A.device)
         if self.B.requires_grad:
-            g_B = _reduce_grad_shape(-g_arr * a_arr / (b_arr * b_arr), self.B.shape)
-            grad_B = Tensor(g_B, device=self.B.device)
+            grad_B = Tensor(-g_arr * a_arr / (b_arr * b_arr), device=self.B.device)
         return [grad_A, grad_B]
 
 class ReluBackward(GradFn):

@@ -55,42 +55,6 @@ def torch_fx_to_forgecc_ir(gm: Any, example_inputs: List[Any]) -> Graph:
             env[node.name] = val
             inp_idx += 1
 
-        elif node.op == "get_attr":
-            sub_obj = gm
-            for part in str(node.target).split("."):
-                sub_obj = getattr(sub_obj, part)
-            if isinstance(sub_obj, torch.Tensor):
-                c_val = g.add_constant(sub_obj.detach().cpu().numpy())
-                env[node.name] = c_val
-
-        elif node.op == "call_module":
-            submod = gm.get_submodule(str(node.target))
-            if isinstance(submod, nn.Linear):
-                inp_val = env[node.args[0].name]
-                w_arr = submod.weight.detach().cpu().numpy().T
-                w_val = g.add_constant(w_arr)
-                out_shape = (inp_val.shape[0], w_arr.shape[1]) if len(inp_val.shape) == 2 else inp_val.shape
-                mm_val = g.add_node(OpKind.MATMUL, [inp_val, w_val], out_shape)
-                if submod.bias is not None:
-                    b_arr = submod.bias.detach().cpu().numpy()
-                    b_val = g.add_constant(b_arr)
-                    add_val = g.add_node(OpKind.ADD, [mm_val, b_val], out_shape)
-                    env[node.name] = add_val
-                else:
-                    env[node.name] = mm_val
-            elif isinstance(submod, nn.ReLU):
-                inp_val = env[node.args[0].name]
-                env[node.name] = g.add_node(OpKind.RELU, [inp_val], inp_val.shape)
-            elif isinstance(submod, nn.Sigmoid):
-                inp_val = env[node.args[0].name]
-                env[node.name] = g.add_node(OpKind.SIGMOID, [inp_val], inp_val.shape)
-            elif isinstance(submod, nn.Tanh):
-                inp_val = env[node.args[0].name]
-                env[node.name] = g.add_node(OpKind.TANH, [inp_val], inp_val.shape)
-            elif isinstance(submod, nn.GELU):
-                inp_val = env[node.args[0].name]
-                env[node.name] = g.add_node(OpKind.GELU, [inp_val], inp_val.shape)
-
         elif node.op in ("call_function", "call_method"):
             target_name = str(node.target)
             args = node.args
@@ -123,26 +87,6 @@ def torch_fx_to_forgecc_ir(gm: Any, example_inputs: List[Any]) -> Graph:
             if mapped_inputs:
                 out_shape = mapped_inputs[0].shape
 
-            if "linear" in target_name.lower():
-                if len(mapped_inputs) >= 2:
-                    w_val = mapped_inputs[1]
-                    if w_val.is_constant():
-                        w_arr = w_val.const_data
-                        if len(w_arr.shape) == 2 and len(mapped_inputs[0].shape) == 2 and mapped_inputs[0].shape[1] == w_arr.shape[1]:
-                            w_val = g.add_constant(w_arr.T)
-                            mapped_inputs[1] = w_val
-                    s0 = mapped_inputs[0].shape
-                    s1 = mapped_inputs[1].shape
-                    if len(s0) == 2 and len(s1) == 2:
-                        out_shape = (s0[0], s1[1])
-                    mm_val = g.add_node(OpKind.MATMUL, [mapped_inputs[0], mapped_inputs[1]], out_shape)
-                    if len(mapped_inputs) >= 3:
-                        add_val = g.add_node(OpKind.ADD, [mm_val, mapped_inputs[2]], out_shape)
-                        env[node.name] = add_val
-                    else:
-                        env[node.name] = mm_val
-                    continue
-
             op_kind = OpKind.ADD
             if any(k in target_name.lower() for k in ["add", "operator.add"]):
                 op_kind = OpKind.ADD
@@ -152,7 +96,7 @@ def torch_fx_to_forgecc_ir(gm: Any, example_inputs: List[Any]) -> Graph:
                 op_kind = OpKind.MUL
             elif any(k in target_name.lower() for k in ["div", "truediv"]):
                 op_kind = OpKind.DIV
-            elif any(k in target_name.lower() for k in ["mm", "matmul", "bmm", "gemm"]):
+            elif any(k in target_name.lower() for k in ["mm", "matmul", "linear", "bmm", "gemm"]):
                 op_kind = OpKind.MATMUL
                 if len(mapped_inputs) >= 2:
                     s0 = mapped_inputs[0].shape
