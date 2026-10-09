@@ -13,7 +13,7 @@ if os.path.exists(readme_path):
 
 setup(
     name="forgecc",
-    version="0.2.2",
+    version="0.2.3",
     description="High-Performance ML Compiler and Universal GPU Execution Engine",
     long_description=long_description,
     long_description_content_type="text/markdown",
