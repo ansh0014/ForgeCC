@@ -14,54 +14,158 @@ ForgeCC resolves these bottlenecks through three core design principles:
 
 ---
 
-## 2. Architectural Overview
+## 2. System Architecture & Subsystem Workflows
+
+### 2.1 Complete End-to-End System Pipeline
 
 ```mermaid
 flowchart TD
     subgraph Frontends["Frontend Entrypoints"]
-        F1["Python Tensor API"]
-        F2["PyTorch FX Adapter"]
-        F3["ONNX Model Frontend"]
-        F4["C++ Universal Interface"]
+        A1["Python Tensor API"]
+        A2["PyTorch FX Adapter (@compile_torch_module)"]
+        A3["Binary Protobuf ONNX Parser"]
+        A4["C++ Universal Runtime API"]
     end
 
-    subgraph Compiler["ForgeCC Compiler & Optimizer"]
-        IR["Functional SSA IR (Graph / Node / Value)"]
-        PM["Pass Manager"]
-        OPT1["Constant Folding"]
-        OPT2["Algebraic Simplification"]
-        OPT3["Common Subexpression Elimination"]
-        OPT4["Dead Code Elimination"]
-        OPT5["Operator Fusion Engine"]
-        CG["CUDA CodeGen (PTX sm_50+)"]
+    subgraph Compiler["ForgeCC Compiler Core"]
+        B1["SSA IR Graph Construction"]
+        B2["Optimization Passes: Constant Folding, DCE, CSE, Alg Simp"]
+        B3["Operator Fusion Engine"]
+        B4["Hardware-Aware Auto-Tuning"]
+        B5["PTX Code Generator (sm_50+)"]
     end
 
-    subgraph Runtime["Execution Engine & Memory"]
-        POOL["Bucketed GPU Memory Pool (Power-of-Two)"]
-        DRIVER["Dynamic Driver JIT Engine (nvcuda.dll / libcuda.so)"]
-        CPU_RT["Multi-Threaded C++ SIMD Runtime"]
-        TAPE["Reverse-Mode Autograd Tape & Optimizers"]
+    subgraph Execution["Execution Engine & Memory"]
+        C1["Bucketed GPU Memory Pool (Power-of-Two)"]
+        C2["Dynamic CUDA Driver JIT (nvcuda.dll / libcuda.so)"]
+        C3["Multi-Threaded CPU SIMD Runtime"]
+        C4["Reverse-Mode Autograd Tape & Optimizers"]
     end
 
     subgraph Hardware["Target Hardware"]
-        GPU["NVIDIA GPU (SM 5.0+)"]
-        CPU["Host CPU"]
+        D1["NVIDIA GPU (SM 5.0+)"]
+        D2["Host CPU SIMD"]
     end
 
-    F1 --> IR
-    F2 --> IR
-    F3 --> IR
-    F4 --> CPU_RT
-    F4 --> DRIVER
+    A1 --> B1
+    A2 --> B1
+    A3 --> B1
+    B1 --> B2 --> B3 --> B4 --> B5
+    B5 --> C2
+    A4 --> C3
+    A4 --> C2
+    C2 --> C1 --> D1
+    C3 --> D2
+    C4 --> B1
+```
 
-    IR --> PM
-    PM --> OPT1 --> OPT2 --> OPT3 --> OPT4 --> OPT5 --> CG
-    CG --> DRIVER
+---
 
-    DRIVER --> POOL
-    DRIVER --> GPU
-    CPU_RT --> CPU
-    TAPE --> IR
+### 2.2 SSA IR Optimization & Fusion Pipeline
+
+```mermaid
+flowchart LR
+    subgraph InputGraph["Input Computation Graph"]
+        N1["MatMul Node"]
+        N2["Bias Add Node"]
+        N3["ReLU Node"]
+        N4["Residual Add Node"]
+        N1 --> N2 --> N3 --> N4
+    end
+
+    subgraph Passes["Pass Manager Pipeline"]
+        P1["Constant Folding"]
+        P2["Algebraic Simplification"]
+        P3["Common Subexpression Elimination"]
+        P4["Dead Code Elimination"]
+        P5["Register-Level Fusion Pass"]
+        P1 --> P2 --> P3 --> P4 --> P5
+    end
+
+    subgraph FusedOutput["Fused IR Representation"]
+        FN["Fused matmul_add_relu_residual Kernel"]
+    end
+
+    InputGraph --> Passes --> FusedOutput
+```
+
+---
+
+### 2.3 Zero-SDK Dynamic CUDA Driver JIT Engine
+
+```mermaid
+sequenceDiagram
+    participant UserApp as "Python Application"
+    participant ForgeRuntime as "ForgeCC Runtime"
+    participant DriverAPI as "nvcuda.dll / libcuda.so"
+    participant NVGPU as "NVIDIA GPU Hardware"
+
+    UserApp->>ForgeRuntime: forgecc.matmul_relu(A, B)
+    ForgeRuntime->>DriverAPI: cuModuleLoadDataEx(PTX Assembly)
+    DriverAPI->>NVGPU: JIT Compile PTX to SASS in GPU Driver
+    ForgeRuntime->>DriverAPI: Memory Pool Pointer Fetch
+    ForgeRuntime->>DriverAPI: cuLaunchKernel(Grid, Block, SharedMem, Stream, Params)
+    DriverAPI->>NVGPU: Execute Register-Fused Kernel
+    NVGPU-->>ForgeRuntime: Stream Complete
+    ForgeRuntime-->>UserApp: Return Computed Output Tensor
+```
+
+---
+
+### 2.4 Bucketed GPU Memory Pool Lifecycle
+
+```mermaid
+stateDiagram-v2
+    state "Tensor Allocation Request (Size S)" as Req
+    state "Compute Power-of-Two Bucket (2^ceil(log2(S)))" as Bucket
+    state "Check Free Bucket List" as Check
+    state "Reuse Cached Pointer (O(1) Zero Driver Latency)" as Reuse
+    state "Allocate New Block via cuMemAlloc" as NewAlloc
+    state "Tensor Execution in Kernel" as Active
+    state "Deallocate: Return Pointer to Bucket Pool" as ReturnPool
+
+    [*] --> Req
+    Req --> Bucket
+    Bucket --> Check
+    Check --> Reuse: Available in Bucket
+    Check --> NewAlloc: Bucket Empty
+    Reuse --> Active
+    NewAlloc --> Active
+    Active --> ReturnPool: Tensor Destruction / Pool Release
+    ReturnPool --> Check: Recycled for Next Iteration
+```
+
+---
+
+### 2.5 Reverse-Mode Autograd Tape & Optimizer Pipeline
+
+```mermaid
+flowchart TD
+    subgraph ForwardPass["Forward Evaluation (Graph & Tape Recording)"]
+        X["Input x"] --> M1["w1 @ x"]
+        W1["Weight w1"] --> M1
+        M1 --> R1["ReLU(z1)"]
+        R1 --> M2["w2 @ a1"]
+        W2["Weight w2"] --> M2
+        M2 --> S1["Sigmoid(z2)"]
+        S1 --> L["Loss = MSE(y_pred, y_true)"]
+    end
+
+    subgraph BackwardTape["Reverse-Mode Differentiation Tape"]
+        dL["dL / dLoss = 1.0"] --> dS["SigmoidBackward: dL/dz2"]
+        dS --> dM2["MatMulBackward: dL/dw2 & dL/da1"]
+        dM2 --> dR1["ReLUBackward: dL/dz1"]
+        dR1 --> dM1["MatMulBackward: dL/dw1 & dL/dx"]
+    end
+
+    subgraph Optimizer["Parameter Update"]
+        dM2 --> OPT["AdamW / Adam / SGD In-Place Step"]
+        dM1 --> OPT
+        OPT --> UP1["Update w1 in-place"]
+        OPT --> UP2["Update w2 in-place"]
+    end
+
+    L -.-> dL
 ```
 
 ---

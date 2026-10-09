@@ -1,9 +1,14 @@
 from setuptools import setup, find_packages
 import os
 
+current_dir = os.path.dirname(os.path.abspath(__file__))
+readme_path = os.path.join(current_dir, "README.md")
+if not os.path.exists(readme_path):
+    readme_path = os.path.join(current_dir, "..", "README.md")
+
 long_description = ""
-if os.path.exists("README.md"):
-    with open("README.md", "r", encoding="utf-8") as f:
+if os.path.exists(readme_path):
+    with open(readme_path, "r", encoding="utf-8") as f:
         long_description = f.read()
 
 setup(
@@ -29,4 +34,3 @@ setup(
     ],
     python_requires=">=3.8",
 )
-
