@@ -3,8 +3,6 @@ import os
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
 readme_path = os.path.join(current_dir, "README.md")
-if not os.path.exists(readme_path):
-    readme_path = os.path.join(current_dir, "..", "README.md")
 
 long_description = ""
 if os.path.exists(readme_path):
