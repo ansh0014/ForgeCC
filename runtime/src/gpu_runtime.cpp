@@ -37,6 +37,9 @@ typedef CUresult (*PFN_cuLaunchKernel)(CUfunction, unsigned int, unsigned int, u
                                        unsigned int, unsigned int, unsigned int,
                                        unsigned int, void*, void**, void**);
 typedef CUresult (*PFN_cuCtxSynchronize)(void);
+typedef CUresult (*PFN_cuDeviceGetName)(char*, int, CUdevice);
+typedef CUresult (*PFN_cuDeviceGetAttribute)(int*, int, CUdevice);
+typedef CUresult (*PFN_cuMemGetInfo)(size_t*, size_t*);
 
 struct CudaDriverAPI {
     PFN_cuInit              cuInit = nullptr;
@@ -50,6 +53,9 @@ struct CudaDriverAPI {
     PFN_cuModuleGetFunction cuModuleGetFunction = nullptr;
     PFN_cuLaunchKernel      cuLaunchKernel = nullptr;
     PFN_cuCtxSynchronize    cuCtxSynchronize = nullptr;
+    PFN_cuDeviceGetName     cuDeviceGetName = nullptr;
+    PFN_cuDeviceGetAttribute cuDeviceGetAttribute = nullptr;
+    PFN_cuMemGetInfo        cuMemGetInfo = nullptr;
 
     bool initialized = false;
     bool available = false;
@@ -597,6 +603,9 @@ void init_driver() {
     g_cuda.cuModuleGetFunction = (PFN_cuModuleGetFunction)GetProcAddress(hLib, "cuModuleGetFunction");
     g_cuda.cuLaunchKernel      = (PFN_cuLaunchKernel)GetProcAddress(hLib, "cuLaunchKernel");
     g_cuda.cuCtxSynchronize    = (PFN_cuCtxSynchronize)GetProcAddress(hLib, "cuCtxSynchronize");
+    g_cuda.cuDeviceGetName     = (PFN_cuDeviceGetName)GetProcAddress(hLib, "cuDeviceGetName");
+    g_cuda.cuDeviceGetAttribute = (PFN_cuDeviceGetAttribute)GetProcAddress(hLib, "cuDeviceGetAttribute");
+    g_cuda.cuMemGetInfo        = (PFN_cuMemGetInfo)GetProcAddress(hLib, "cuMemGetInfo");
 #else
     void* hLib = dlopen("libcuda.so", RTLD_LAZY);
     if (!hLib) hLib = dlopen("libcuda.so.1", RTLD_LAZY);
@@ -623,6 +632,9 @@ void init_driver() {
     g_cuda.cuModuleGetFunction = (PFN_cuModuleGetFunction)dlsym(hLib, "cuModuleGetFunction");
     g_cuda.cuLaunchKernel      = (PFN_cuLaunchKernel)dlsym(hLib, "cuLaunchKernel");
     g_cuda.cuCtxSynchronize    = (PFN_cuCtxSynchronize)dlsym(hLib, "cuCtxSynchronize");
+    g_cuda.cuDeviceGetName     = (PFN_cuDeviceGetName)dlsym(hLib, "cuDeviceGetName");
+    g_cuda.cuDeviceGetAttribute = (PFN_cuDeviceGetAttribute)dlsym(hLib, "cuDeviceGetAttribute");
+    g_cuda.cuMemGetInfo        = (PFN_cuMemGetInfo)dlsym(hLib, "cuMemGetInfo");
 #endif
 
     if (!g_cuda.cuInit || !g_cuda.cuDeviceGet || !g_cuda.cuCtxCreate || !g_cuda.cuMemAlloc ||
@@ -883,6 +895,124 @@ void forge_gpu_add_relu_fused(const float* a, const float* b, float* out, int64_
 
     void* args[] = { &d_a, &d_b, &d_out, &n };
     g_cuda.cuLaunchKernel(g_cuda.fn_add_relu, gridSize, 1, 1, blockSize, 1, 1, 0, nullptr, args, nullptr);
+}
+
+bool forge_gpu_get_device_name(char* out_name, int max_len) {
+    init_driver();
+    if (!g_cuda.available || !g_cuda.cuDeviceGetName) return false;
+    CUdevice dev = 0;
+    if (g_cuda.cuDeviceGet(&dev, 0) != CUDA_SUCCESS) return false;
+    return g_cuda.cuDeviceGetName(out_name, max_len, dev) == CUDA_SUCCESS;
+}
+
+int forge_gpu_get_attribute(int attribute) {
+    init_driver();
+    if (!g_cuda.available || !g_cuda.cuDeviceGetAttribute) return -1;
+    CUdevice dev = 0;
+    if (g_cuda.cuDeviceGet(&dev, 0) != CUDA_SUCCESS) return -1;
+    int val = 0;
+    if (g_cuda.cuDeviceGetAttribute(&val, attribute, dev) == CUDA_SUCCESS) {
+        return val;
+    }
+    return -1;
+}
+
+bool forge_gpu_get_memory_info(size_t* free_bytes, size_t* total_bytes) {
+    init_driver();
+    if (!g_cuda.available || !g_cuda.cuMemGetInfo) return false;
+    return g_cuda.cuMemGetInfo(free_bytes, total_bytes) == CUDA_SUCCESS;
+}
+
+void forge_gpu_auto_tune_elementwise(int64_t n, unsigned int* block_size, unsigned int* grid_size) {
+    if (!block_size || !grid_size) return;
+    *block_size = 256;
+    *grid_size = static_cast<unsigned int>((n + 255) / 256);
+    if (*grid_size == 0) *grid_size = 1;
+}
+
+void forge_gpu_auto_tune_matmul(int64_t M, int64_t N, unsigned int* block_x, unsigned int* block_y, unsigned int* grid_x, unsigned int* grid_y) {
+    if (!block_x || !block_y || !grid_x || !grid_y) return;
+    *block_x = 16;
+    *block_y = 16;
+    *grid_x = static_cast<unsigned int>((N + 15) / 16);
+    *grid_y = static_cast<unsigned int>((M + 15) / 16);
+    if (*grid_x == 0) *grid_x = 1;
+    if (*grid_y == 0) *grid_y = 1;
+}
+
+void forge_gpu_relu_backward(const float* grad_out, const float* in, float* grad_in, int64_t n) {
+    init_driver();
+    if (!g_cuda.available) return;
+    std::vector<float> h_go(n);
+    std::vector<float> h_in(n);
+    std::vector<float> h_gi(n);
+    forge_gpu_memcpy_to_host(h_go.data(), grad_out, n * sizeof(float));
+    forge_gpu_memcpy_to_host(h_in.data(), in, n * sizeof(float));
+    for (int64_t i = 0; i < n; ++i) {
+        h_gi[i] = (h_in[i] > 0.0f) ? h_go[i] : 0.0f;
+    }
+    forge_gpu_memcpy_to_device(grad_in, h_gi.data(), n * sizeof(float));
+}
+
+void forge_gpu_sgd_step(float* weights, const float* grads, float* velocity,
+                        float lr, float momentum, float weight_decay, int64_t n) {
+    init_driver();
+    if (!g_cuda.available) return;
+    std::vector<float> h_w(n);
+    std::vector<float> h_g(n);
+    std::vector<float> h_v(n, 0.0f);
+    forge_gpu_memcpy_to_host(h_w.data(), weights, n * sizeof(float));
+    forge_gpu_memcpy_to_host(h_g.data(), grads, n * sizeof(float));
+    if (velocity && momentum > 0.0f) {
+        forge_gpu_memcpy_to_host(h_v.data(), velocity, n * sizeof(float));
+    }
+    for (int64_t i = 0; i < n; ++i) {
+        float g = h_g[i];
+        if (weight_decay != 0.0f) {
+            g += weight_decay * h_w[i];
+        }
+        if (velocity && momentum > 0.0f) {
+            h_v[i] = momentum * h_v[i] + g;
+            h_w[i] -= lr * h_v[i];
+        } else {
+            h_w[i] -= lr * g;
+        }
+    }
+    forge_gpu_memcpy_to_device(weights, h_w.data(), n * sizeof(float));
+    if (velocity && momentum > 0.0f) {
+        forge_gpu_memcpy_to_device(velocity, h_v.data(), n * sizeof(float));
+    }
+}
+
+void forge_gpu_adam_step(float* weights, const float* grads, float* m, float* v,
+                         float lr, float beta1, float beta2, float eps,
+                         float weight_decay, int64_t step, int64_t n) {
+    init_driver();
+    if (!g_cuda.available) return;
+    std::vector<float> h_w(n);
+    std::vector<float> h_g(n);
+    std::vector<float> h_m(n);
+    std::vector<float> h_v(n);
+    forge_gpu_memcpy_to_host(h_w.data(), weights, n * sizeof(float));
+    forge_gpu_memcpy_to_host(h_g.data(), grads, n * sizeof(float));
+    forge_gpu_memcpy_to_host(h_m.data(), m, n * sizeof(float));
+    forge_gpu_memcpy_to_host(h_v.data(), v, n * sizeof(float));
+    float bias_correction1 = 1.0f - std::pow(beta1, static_cast<float>(step));
+    float bias_correction2 = 1.0f - std::pow(beta2, static_cast<float>(step));
+    for (int64_t i = 0; i < n; ++i) {
+        float g = h_g[i];
+        if (weight_decay != 0.0f) {
+            g += weight_decay * h_w[i];
+        }
+        h_m[i] = beta1 * h_m[i] + (1.0f - beta1) * g;
+        h_v[i] = beta2 * h_v[i] + (1.0f - beta2) * (g * g);
+        float m_hat = h_m[i] / bias_correction1;
+        float v_hat = h_v[i] / bias_correction2;
+        h_w[i] -= lr * m_hat / (std::sqrt(v_hat) + eps);
+    }
+    forge_gpu_memcpy_to_device(weights, h_w.data(), n * sizeof(float));
+    forge_gpu_memcpy_to_device(m, h_m.data(), n * sizeof(float));
+    forge_gpu_memcpy_to_device(v, h_v.data(), n * sizeof(float));
 }
 
 }

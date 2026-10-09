@@ -270,6 +270,49 @@ class ForgeRuntime:
             ctypes.POINTER(ctypes.c_uint), ctypes.POINTER(ctypes.c_uint)
         ]
 
+        self.lib.cpu_matmul_backward.restype = None
+        self.lib.cpu_matmul_backward.argtypes = [
+            ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p,
+            ctypes.c_void_p, ctypes.c_void_p,
+            ctypes.c_int64, ctypes.c_int64, ctypes.c_int64
+        ]
+
+        self.lib.cpu_relu_backward.restype = None
+        self.lib.cpu_relu_backward.argtypes = [
+            ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int64
+        ]
+
+        self.lib.cpu_sgd_step.restype = None
+        self.lib.cpu_sgd_step.argtypes = [
+            ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p,
+            ctypes.c_float, ctypes.c_float, ctypes.c_float, ctypes.c_int64
+        ]
+
+        self.lib.cpu_adam_step.restype = None
+        self.lib.cpu_adam_step.argtypes = [
+            ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p,
+            ctypes.c_float, ctypes.c_float, ctypes.c_float, ctypes.c_float,
+            ctypes.c_float, ctypes.c_int64, ctypes.c_int64
+        ]
+
+        self.lib.forge_gpu_relu_backward.restype = None
+        self.lib.forge_gpu_relu_backward.argtypes = [
+            ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int64
+        ]
+
+        self.lib.forge_gpu_sgd_step.restype = None
+        self.lib.forge_gpu_sgd_step.argtypes = [
+            ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p,
+            ctypes.c_float, ctypes.c_float, ctypes.c_float, ctypes.c_int64
+        ]
+
+        self.lib.forge_gpu_adam_step.restype = None
+        self.lib.forge_gpu_adam_step.argtypes = [
+            ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p,
+            ctypes.c_float, ctypes.c_float, ctypes.c_float, ctypes.c_float,
+            ctypes.c_float, ctypes.c_int64, ctypes.c_int64
+        ]
+
 _rt = ForgeRuntime()
 
 def is_gpu_available() -> bool:
@@ -360,8 +403,11 @@ def auto_tune_matmul(M: int, K: int, N: int) -> Dict[str, int]:
 
 
 class Tensor:
-    def __init__(self, data, device=Device.CPU, dtype=None):
+    def __init__(self, data, device=Device.CPU, dtype=None, requires_grad: bool = False):
         self.gpu_ptr = None
+        self.requires_grad = requires_grad
+        self.grad = None
+        self.grad_fn = None
         target_dtype = dtype if dtype is not None else np.float32
         if isinstance(data, np.ndarray):
             self.host_array = np.ascontiguousarray(data, dtype=target_dtype)
@@ -369,7 +415,6 @@ class Tensor:
             self.host_array = np.ascontiguousarray(np.array(data, dtype=target_dtype))
         elif isinstance(data, Tensor):
             self.host_array = data.numpy().astype(target_dtype).copy()
-
         else:
             raise TypeError("Unsupported data type for Tensor initialization.")
 
@@ -400,15 +445,14 @@ class Tensor:
                 pass
             self.gpu_ptr = None
 
-
     def to(self, target_device):
         if self.device == target_device:
             return self
 
         if target_device == Device.GPU and is_gpu_available():
-            return Tensor(self.numpy(), device=Device.GPU)
+            return Tensor(self.numpy(), device=Device.GPU, requires_grad=self.requires_grad)
         else:
-            return Tensor(self.numpy(), device=Device.CPU)
+            return Tensor(self.numpy(), device=Device.CPU, requires_grad=self.requires_grad)
 
     def numpy(self) -> np.ndarray:
         if self.device == Device.GPU and self.gpu_ptr and _rt.lib:
@@ -420,6 +464,22 @@ class Tensor:
             )
             return out
         return self.host_array.copy()
+
+    def _set_from_numpy(self, arr: np.ndarray):
+        target_dtype = self.host_array.dtype
+        self.host_array = np.ascontiguousarray(arr, dtype=target_dtype)
+        self.shape = self.host_array.shape
+        self.nbytes = self.host_array.nbytes
+        if self.device == Device.GPU and self.gpu_ptr and _rt.lib:
+            _rt.lib.forge_gpu_memcpy_to_device(
+                self.gpu_ptr,
+                self.host_array.ctypes.data_as(ctypes.c_void_p),
+                self.nbytes
+            )
+
+    def backward(self, grad=None):
+        from .autograd import backward_tape
+        backward_tape(self, grad)
 
     def __matmul__(self, other):
         return matmul(self, other)
@@ -478,8 +538,8 @@ class Tensor:
         dev_str = "GPU" if self.device == Device.GPU else "CPU"
         return f"forgecc.Tensor(shape={list(self.shape)}, device={dev_str}, data=\n{self.numpy()})"
 
-def tensor(data, device=Device.CPU, dtype=None) -> Tensor:
-    return Tensor(data, device=device, dtype=dtype)
+def tensor(data, device=Device.CPU, dtype=None, requires_grad: bool = False) -> Tensor:
+    return Tensor(data, device=device, dtype=dtype, requires_grad=requires_grad)
 
 
 def _to_tensor(x, device=Device.CPU):
@@ -511,7 +571,7 @@ def matmul(A, B):
         out_arr = np.empty((M, N), dtype=np.float32)
         _rt.lib.forge_gpu_memcpy_to_host(out_arr.ctypes.data_as(ctypes.c_void_p), C_ptr, M * N * 4)
         _rt.mempool.free(C_ptr, M * N * 4)
-        return Tensor(out_arr, device=Device.GPU)
+        out = Tensor(out_arr, device=Device.GPU)
     else:
         out_arr = np.empty((M, N), dtype=np.float32)
         _rt.lib.cpu_matmul(
@@ -520,7 +580,15 @@ def matmul(A, B):
             out_arr.ctypes.data_as(ctypes.c_void_p),
             M, K, N
         )
-        return Tensor(out_arr, device=Device.CPU)
+        out = Tensor(out_arr, device=Device.CPU)
+
+    if t_A.requires_grad or t_B.requires_grad:
+        from .autograd import MatMulBackward
+        out.requires_grad = True
+        fn = MatMulBackward(t_A, t_B)
+        fn.next_functions = [(getattr(t_A, "grad_fn", None), t_A), (getattr(t_B, "grad_fn", None), t_B)]
+        out.grad_fn = fn
+    return out
 
 def add(A, B):
     if hasattr(A, "graph") or hasattr(B, "graph"):
@@ -540,7 +608,7 @@ def add(A, B):
             out_arr = np.empty(t_A.shape, dtype=np.float32)
             _rt.lib.forge_gpu_memcpy_to_host(out_arr.ctypes.data_as(ctypes.c_void_p), C_ptr, n * 4)
             _rt.mempool.free(C_ptr, n * 4)
-            return Tensor(out_arr, device=Device.GPU)
+            out = Tensor(out_arr, device=Device.GPU)
         else:
             out_arr = np.empty(t_A.shape, dtype=np.float32)
             _rt.lib.cpu_add(
@@ -549,10 +617,18 @@ def add(A, B):
                 out_arr.ctypes.data_as(ctypes.c_void_p),
                 n
             )
-            return Tensor(out_arr, device=Device.CPU)
+            out = Tensor(out_arr, device=Device.CPU)
     else:
         res = t_A.numpy() + t_B.numpy()
-        return Tensor(res, device=Device.GPU if use_gpu else Device.CPU)
+        out = Tensor(res, device=Device.GPU if use_gpu else Device.CPU)
+
+    if t_A.requires_grad or t_B.requires_grad:
+        from .autograd import AddBackward
+        out.requires_grad = True
+        fn = AddBackward(t_A, t_B)
+        fn.next_functions = [(getattr(t_A, "grad_fn", None), t_A), (getattr(t_B, "grad_fn", None), t_B)]
+        out.grad_fn = fn
+    return out
 
 def sub(A, B):
     if hasattr(A, "graph") or hasattr(B, "graph"):
@@ -571,7 +647,7 @@ def sub(A, B):
             out_arr = np.empty(t_A.shape, dtype=np.float32)
             _rt.lib.forge_gpu_memcpy_to_host(out_arr.ctypes.data_as(ctypes.c_void_p), C_ptr, n * 4)
             _rt.mempool.free(C_ptr, n * 4)
-            return Tensor(out_arr, device=Device.GPU)
+            out = Tensor(out_arr, device=Device.GPU)
         else:
             out_arr = np.empty(t_A.shape, dtype=np.float32)
             _rt.lib.cpu_sub(
@@ -580,10 +656,18 @@ def sub(A, B):
                 out_arr.ctypes.data_as(ctypes.c_void_p),
                 n
             )
-            return Tensor(out_arr, device=Device.CPU)
+            out = Tensor(out_arr, device=Device.CPU)
     else:
         res = t_A.numpy() - t_B.numpy()
-        return Tensor(res, device=Device.GPU if use_gpu else Device.CPU)
+        out = Tensor(res, device=Device.GPU if use_gpu else Device.CPU)
+
+    if t_A.requires_grad or t_B.requires_grad:
+        from .autograd import SubBackward
+        out.requires_grad = True
+        fn = SubBackward(t_A, t_B)
+        fn.next_functions = [(getattr(t_A, "grad_fn", None), t_A), (getattr(t_B, "grad_fn", None), t_B)]
+        out.grad_fn = fn
+    return out
 
 def mul(A, B):
     if hasattr(A, "graph") or hasattr(B, "graph"):
@@ -602,7 +686,7 @@ def mul(A, B):
             out_arr = np.empty(t_A.shape, dtype=np.float32)
             _rt.lib.forge_gpu_memcpy_to_host(out_arr.ctypes.data_as(ctypes.c_void_p), C_ptr, n * 4)
             _rt.mempool.free(C_ptr, n * 4)
-            return Tensor(out_arr, device=Device.GPU)
+            out = Tensor(out_arr, device=Device.GPU)
         else:
             out_arr = np.empty(t_A.shape, dtype=np.float32)
             _rt.lib.cpu_mul(
@@ -611,10 +695,18 @@ def mul(A, B):
                 out_arr.ctypes.data_as(ctypes.c_void_p),
                 n
             )
-            return Tensor(out_arr, device=Device.CPU)
+            out = Tensor(out_arr, device=Device.CPU)
     else:
         res = t_A.numpy() * t_B.numpy()
-        return Tensor(res, device=Device.GPU if use_gpu else Device.CPU)
+        out = Tensor(res, device=Device.GPU if use_gpu else Device.CPU)
+
+    if t_A.requires_grad or t_B.requires_grad:
+        from .autograd import MulBackward
+        out.requires_grad = True
+        fn = MulBackward(t_A, t_B)
+        fn.next_functions = [(getattr(t_A, "grad_fn", None), t_A), (getattr(t_B, "grad_fn", None), t_B)]
+        out.grad_fn = fn
+    return out
 
 def div(A, B):
     if hasattr(A, "graph") or hasattr(B, "graph"):
@@ -623,7 +715,14 @@ def div(A, B):
     t_B = _to_tensor(B)
     res = np.divide(t_A.numpy(), t_B.numpy(), out=np.zeros_like(t_A.numpy()), where=(t_B.numpy() != 0))
     use_gpu = (t_A.device == Device.GPU or t_B.device == Device.GPU) and is_gpu_available()
-    return Tensor(res, device=Device.GPU if use_gpu else Device.CPU)
+    out = Tensor(res, device=Device.GPU if use_gpu else Device.CPU)
+    if t_A.requires_grad or t_B.requires_grad:
+        from .autograd import DivBackward
+        out.requires_grad = True
+        fn = DivBackward(t_A, t_B)
+        fn.next_functions = [(getattr(t_A, "grad_fn", None), t_A), (getattr(t_B, "grad_fn", None), t_B)]
+        out.grad_fn = fn
+    return out
 
 def relu(x):
     if hasattr(x, "graph"):
@@ -637,7 +736,7 @@ def relu(x):
         out_arr = np.empty(t_x.shape, dtype=np.float32)
         _rt.lib.forge_gpu_memcpy_to_host(out_arr.ctypes.data_as(ctypes.c_void_p), C_ptr, n * 4)
         _rt.mempool.free(C_ptr, n * 4)
-        return Tensor(out_arr, device=Device.GPU)
+        out = Tensor(out_arr, device=Device.GPU)
     else:
         out_arr = np.empty(t_x.shape, dtype=np.float32)
         _rt.lib.cpu_relu(
@@ -645,7 +744,15 @@ def relu(x):
             out_arr.ctypes.data_as(ctypes.c_void_p),
             n
         )
-        return Tensor(out_arr, device=Device.CPU)
+        out = Tensor(out_arr, device=Device.CPU)
+
+    if t_x.requires_grad:
+        from .autograd import ReluBackward
+        out.requires_grad = True
+        fn = ReluBackward(t_x)
+        fn.next_functions = [(getattr(t_x, "grad_fn", None), t_x)]
+        out.grad_fn = fn
+    return out
 
 def sigmoid(x):
     if hasattr(x, "graph"):
@@ -658,7 +765,14 @@ def sigmoid(x):
         out_arr.ctypes.data_as(ctypes.c_void_p),
         n
     )
-    return Tensor(out_arr, device=t_x.device)
+    out = Tensor(out_arr, device=t_x.device)
+    if t_x.requires_grad:
+        from .autograd import SigmoidBackward
+        out.requires_grad = True
+        fn = SigmoidBackward(out, t_x)
+        fn.next_functions = [(getattr(t_x, "grad_fn", None), t_x)]
+        out.grad_fn = fn
+    return out
 
 def gelu(x):
     if hasattr(x, "graph"):
@@ -684,7 +798,14 @@ def tanh(x):
         out_arr.ctypes.data_as(ctypes.c_void_p),
         n
     )
-    return Tensor(out_arr, device=t_x.device)
+    out = Tensor(out_arr, device=t_x.device)
+    if t_x.requires_grad:
+        from .autograd import TanhBackward
+        out.requires_grad = True
+        fn = TanhBackward(out, t_x)
+        fn.next_functions = [(getattr(t_x, "grad_fn", None), t_x)]
+        out.grad_fn = fn
+    return out
 
 def sum_tensor(x):
     if hasattr(x, "graph"):

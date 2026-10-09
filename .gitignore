@@ -128,3 +128,4 @@ temp/
 *.backup
 *.old
 *.orig
+example.py

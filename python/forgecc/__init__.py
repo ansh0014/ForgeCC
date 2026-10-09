@@ -50,7 +50,32 @@ from .onnx_frontend import (
     compile_onnx
 )
 
-__version__ = "0.1.4"
+from .adapters import (
+    is_torch_available,
+    torch_to_forgecc,
+    forgecc_to_torch,
+    torch_fx_to_forgecc_ir,
+    forgecc_backend,
+    compile_torch_module
+)
+
+from .autograd import (
+    mse_loss,
+    backward_tape
+)
+
+from .optim import (
+    Optimizer,
+    SGD,
+    Adam,
+    AdamW
+)
+
+from . import optim
+from . import adapters
+from . import autograd
+
+__version__ = "0.2.0"
 __all__ = [
     "Device",
     "is_gpu_available",
@@ -94,5 +119,20 @@ __all__ = [
     "CUDACodeGen",
     "trace",
     "compile",
-    "CompiledGraph"
+    "CompiledGraph",
+    "is_torch_available",
+    "torch_to_forgecc",
+    "forgecc_to_torch",
+    "torch_fx_to_forgecc_ir",
+    "forgecc_backend",
+    "compile_torch_module",
+    "mse_loss",
+    "backward_tape",
+    "Optimizer",
+    "SGD",
+    "Adam",
+    "AdamW",
+    "optim",
+    "adapters",
+    "autograd"
 ]

@@ -141,8 +141,8 @@ class Pass:
         raise NotImplementedError
 
 class PassManager:
-    def __init__(self):
-        self.passes: List[Pass] = []
+    def __init__(self, passes: Optional[List[Pass]] = None):
+        self.passes: List[Pass] = list(passes) if passes is not None else []
 
     def add_pass(self, p: Pass):
         self.passes.append(p)
@@ -372,6 +372,10 @@ class DeadCodeEliminationPass(Pass):
         return opt
 
 class CUDACodeGen:
+    def generate(self, graph: Graph) -> str:
+        ops = [node.op_kind for node in graph.nodes]
+        return self.generate_ptx_for_fused_elementwise(ops, kernel_name=f"{graph.name}_kernel")
+
     @staticmethod
     def generate_ptx_for_fused_elementwise(ops: List, kernel_name: str = "custom_fused_kernel") -> str:
         ptx_lines = [
